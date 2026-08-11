@@ -104,7 +104,7 @@ type AgendaEvent = {
   day: number;
   topic: string;
   meta: string;
-  type: "rotation" | "questions" | "review" | "cards" | "theory" | "mock" | "correction";
+  type: "rotation" | "questions" | "review" | "cards" | "theory" | "materials" | "mock" | "correction";
   completed?: boolean;
   studied?: boolean;
 };
@@ -531,7 +531,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
           ) : (
             <section className="secondary-page">
               <div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO</p><h1>{sectionTitle[active]}</h1><p>Todos os dados abaixo conversam com sua rota diária e são recalculados conforme seu progresso.</p></div>{!(["Meu plano", "Flashcards", "Questões", "Assuntos", "Prioridades"].includes(active)) && <button className="primary-button" onClick={() => active === "Bancas e metas" ? setPlannerOpen(true) : setToast("Novo registro adicionado à sua fila.")}><Plus size={17} /> {active === "Bancas e metas" ? "Ajustar metas" : "Novo registro"}</button>}</div>
-              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyHours={hours} dailyCards={dailyCards} mockExamCadence={mockExamCadence} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onMarkStudied={markTopicAsStudied} />}
+              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyCards={dailyCards} mockExamCadence={mockExamCadence} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onMarkStudied={markTopicAsStudied} />}
               {active === "Flashcards" && <FlashcardsPage logs={questionLogs} exams={mockExams} banks={banks} dailyCards={dailyCards} setToast={setToast} profileId={activeProfileId} studiedTopics={studiedTopics} onOpenTopics={() => setActive("Assuntos")} onSaveStatus={setSaveStatus} />}
               {active === "Questões" && <QuestionsPage logs={questionLogs} setLogs={setQuestionLogs} setToast={setToast} setStudiedTopics={setStudiedTopics} />}
               {active === "Assuntos" && <TopicsPage studiedTopics={studiedTopics} setStudiedTopics={setStudiedTopics} setToast={setToast} focusArea={focusArea} weeklyTopics={weeklyTopics} setWeeklyTopics={setWeeklyTopics} />}
@@ -585,7 +585,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   );
 }
 
-function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyHours, dailyCards, mockExamCadence, onFocusAreaChange, onSaveStatus, onAgendaChange, onMarkStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyHours: number; dailyCards: number; mockExamCadence: 3 | 4; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onMarkStudied: (topic: string) => void }) {
+function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyCards, mockExamCadence, onFocusAreaChange, onSaveStatus, onAgendaChange, onMarkStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyCards: number; mockExamCadence: 3 | 4; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onMarkStudied: (topic: string) => void }) {
   const calendarWeeks = 13;
   const calendarLength = calendarWeeks * 7;
   const calendarDays = useMemo(() => {
@@ -602,19 +602,20 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   const [editingEvent, setEditingEvent] = useState<AgendaEvent | null>(null);
   const [rotation, setRotation] = useState({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 });
   const [newBlock, setNewBlock] = useState({ topic: "", day: 0, meta: "2h", type: "theory" as AgendaEvent["type"] });
+  const [weekTopicChoices, setWeekTopicChoices] = useState<Record<string, string[]>>({});
+  const [weekTopicDraft, setWeekTopicDraft] = useState("");
   const [agendaHydrated, setAgendaHydrated] = useState(false);
   const agendaSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const loadedSuggestionKey = useRef("");
   const suggestedAgenda = useMemo<AgendaEvent[]>(() => {
     if (!focusArea) return [];
-    const lessonsPerWeek = dailyHours === 0 ? 2 : dailyHours <= 2 ? 1 : dailyHours < 4 ? 2 : 3;
+    const lessonsPerWeek = 4;
     const totalLessons = lessonsPerWeek * 4;
     const focusTarget = Math.max(1, Math.round(totalLessons * focusPercentage / 100));
     const focusPool = [...priorities.filter(item => item.area === focusArea).map(item => item.topic), ...topicBank.filter(topic => topic.area === focusArea).map(topic => topic.title)].filter((topic, index, list) => list.indexOf(topic) === index);
     const mixedPool = [...priorities.filter(item => item.area !== focusArea).map(item => item.topic), ...topicBank.filter(topic => topic.area !== focusArea).map(topic => topic.title)].filter((topic, index, list) => list.indexOf(topic) === index);
     let focusCursor = 0; let mixedCursor = 0;
     const lessons = Array.from({ length: totalLessons }, (_, index) => {
-      if (weeklyTopics[index]) return weeklyTopics[index];
       const useFocus = (index * focusTarget) % totalLessons < focusTarget;
       return useFocus ? focusPool[focusCursor++ % Math.max(1, focusPool.length)] ?? focusArea : mixedPool[mixedCursor++ % Math.max(1, mixedPool.length)] ?? focusPool[focusCursor++ % Math.max(1, focusPool.length)] ?? focusArea;
     });
@@ -622,12 +623,15 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     let eventId = 81000;
     for (let week = 0; week < 4; week += 1) {
       const base = week * 7;
-      const questionDay = base + (dailyHours >= 4 ? 1 : 2);
-      const weekLessons = lessons.slice(week * lessonsPerWeek, week * lessonsPerWeek + lessonsPerWeek);
-      weekLessons.forEach(topic => {
+      const automaticLessons = lessons.slice(week * lessonsPerWeek, week * lessonsPerWeek + lessonsPerWeek);
+      const chosenForWeek = (weekTopicChoices[String(week)] ?? (week === 0 ? weeklyTopics : [])).slice(0, 4);
+      const weekLessons = automaticLessons.map((topic, index) => chosenForWeek[index] ?? topic);
+      weekLessons.forEach((topic, lessonIndex) => {
         const priority = priorities.find(item => item.topic === topic);
-        generated.push({ id: eventId++, day: base, topic, meta: `5 questões balizadoras + aula completa · 2h a 2h30 · ${priority?.sourceBank ?? "sequência pedagógica"}`, type: "theory" });
-        generated.push({ id: eventId++, day: questionDay, topic, meta: "15 questões da aula · até 1h · corrigir imediatamente", type: "questions" });
+        const theoryDay = base + (lessonIndex < 2 ? 0 : 1);
+        const questionDay = base + 2;
+        generated.push({ id: eventId++, day: theoryDay, topic, meta: `Aula completa · cerca de 2h · ${priority?.sourceBank ?? "sequência pedagógica"}`, type: "theory" });
+        generated.push({ id: eventId++, day: questionDay, topic, meta: "Primeiro bloco · 15 questões da aula · corrigir e registrar o percentual", type: "questions" });
         const logs = questionLogs.filter(log => log.topic.toLocaleLowerCase("pt-BR") === topic.toLocaleLowerCase("pt-BR"));
         const latest = logs[0]; const previous = logs[1]; const accuracy = latest?.accuracy ?? 0;
         const change = latest && previous ? latest.accuracy - previous.accuracy : 0;
@@ -636,7 +640,6 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
         const performanceDay = latest ? (recordedIndex >= 0 ? recordedIndex : todayIndex) : questionDay;
         const reviewStart = latest ? performanceDay : questionDay;
         const trend = change <= -10 ? ` · queda de ${Math.abs(change)} pontos` : change >= 10 ? ` · melhora de ${change} pontos` : "";
-        if (accuracy < 50 && reviewStart + 1 < calendarLength) generated.push({ id: eventId++, day: reviewStart + 1, topic, meta: `Reforço dirigido aos erros · 30 min${latest ? ` · último acerto ${accuracy}%${trend}` : " · desempenho ainda não medido"}`, type: "theory" });
         const intervals = accuracy < 50 ? [3, 4, 7, 14, 30] : accuracy < 70 ? [4, 7, 14, 30] : [5, 10, 21, 30];
         const questionVolumes = accuracy < 50 ? [10, 8, 6, 5, 4] : accuracy < 70 ? [7, 6, 5, 4] : [5, 4, 4, 3];
         let reviewDay = reviewStart;
@@ -647,6 +650,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
           generated.push({ id: eventId++, day: reviewDay, topic, meta: `Revisão ${stage} · ${questionVolumes[reviewIndex]} questões curtas + flashcards · intervalo ${interval}d · último acerto ${latest ? `${accuracy}%${trend}` : "a medir"}`, type: "review" });
         });
       });
+      generated.push({ id: eventId++, day: base + 1, topic: "Confecção e revisão de materiais", meta: "Organizar resumos, imagens, algoritmos e dúvidas das 4 aulas · bloco livre e editável", type: "materials" });
     }
     const cardGoal = Math.max(10, dailyCards);
     for (let day = 0; day < calendarLength; day += 1) generated.push({ id: 85000 + day, day, topic: "Fila diária adaptativa", meta: `${cardGoal} flashcards · erros + assuntos escolhidos`, type: "cards" });
@@ -657,8 +661,8 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       mockIndex += 1;
     }
     return generated;
-  }, [focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyHours, dailyCards, mockExamCadence, calendarDays, calendarLength]);
-  const suggestionKey = useMemo(() => JSON.stringify({ calendarStart: calendarDays[0]?.iso, focusArea, focusPercentage, weeklyTopics, dailyHours, mockExamCadence, suggested: suggestedAgenda.map(event => [event.day, event.topic, event.meta]) }), [calendarDays, focusArea, focusPercentage, weeklyTopics, dailyHours, mockExamCadence, suggestedAgenda]);
+  }, [focusArea, focusPercentage, weeklyTopics, weekTopicChoices, priorities, questionLogs, dailyCards, mockExamCadence, calendarDays, calendarLength]);
+  const suggestionKey = useMemo(() => JSON.stringify({ calendarStart: calendarDays[0]?.iso, focusArea, focusPercentage, weeklyTopics, weekTopicChoices, mockExamCadence, suggested: suggestedAgenda.map(event => [event.day, event.topic, event.meta]) }), [calendarDays, focusArea, focusPercentage, weeklyTopics, weekTopicChoices, mockExamCadence, suggestedAgenda]);
   const suggestionSnapshot = useRef({ agenda: suggestedAgenda, key: suggestionKey });
   useEffect(() => { suggestionSnapshot.current = { agenda: suggestedAgenda, key: suggestionKey }; }, [suggestedAgenda, suggestionKey]);
 
@@ -669,13 +673,14 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
         const suggestion = suggestionSnapshot.current;
         const result = await supabase?.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "agenda").maybeSingle();
         const localKey = `gps-agenda-state-${profileId}`;
-        let localData: { events?: AgendaEvent[]; rotation?: typeof rotation; suggestionKey?: string } | null = null;
+        let localData: { events?: AgendaEvent[]; rotation?: typeof rotation; suggestionKey?: string; weekTopicChoices?: Record<string, string[]> } | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
         const parsed = result?.data?.data ?? localData;
         if (parsed) {
           setEvents(Array.isArray(parsed.events) ? parsed.events : suggestion.agenda);
           setRotation(currentRotation => parsed.rotation ?? currentRotation);
-        } else { setEvents(suggestion.agenda); setRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 }); }
+          setWeekTopicChoices(parsed.weekTopicChoices ?? {});
+        } else { setEvents(suggestion.agenda); setRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 }); setWeekTopicChoices({}); }
         loadedSuggestionKey.current = parsed ? parsed.suggestionKey ?? "" : suggestion.key;
         setAgendaHydrated(true);
       };
@@ -694,7 +699,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   useEffect(() => {
     if (!agendaHydrated || !supabase || profileId === "joao") return;
     const client = supabase;
-    const state = { events, rotation, suggestionKey };
+    const state = { events, rotation, suggestionKey, weekTopicChoices };
     localStorage.setItem(`gps-agenda-state-${profileId}`, JSON.stringify(state));
     onAgendaChange(events, rotation, suggestionKey);
     onSaveStatus("saving");
@@ -703,7 +708,26 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       if (error) { onSaveStatus("error"); setToast(`Falha ao salvar a agenda: ${error.message}`); }
       else onSaveStatus("saved");
     });
-  }, [events, rotation, suggestionKey, agendaHydrated, profileId, onSaveStatus, setToast, onAgendaChange]);
+  }, [events, rotation, suggestionKey, weekTopicChoices, agendaHydrated, profileId, onSaveStatus, setToast, onAgendaChange]);
+
+  const selectedTopicsThisWeek = (weekTopicChoices[String(weekOffset)] ?? (weekOffset === 0 ? weeklyTopics : [])).slice(0, 4);
+
+  function addTopicToVisibleWeek() {
+    if (weekOffset >= 4) return setToast("As semanas 5 a 13 são reservadas à consolidação. Escolha uma das quatro primeiras semanas para inserir uma nova aula.");
+    const normalized = weekTopicDraft.trim().toLocaleLowerCase("pt-BR");
+    const matched = topicBank.find(topic => topic.title.toLocaleLowerCase("pt-BR") === normalized);
+    if (!matched) return setToast("Escolha um assunto da lista cadastrada.");
+    if (selectedTopicsThisWeek.includes(matched.title)) return setToast("Esse assunto já está escolhido nesta semana.");
+    if (selectedTopicsThisWeek.length >= 4) return setToast("Esta semana já tem quatro assuntos escolhidos. Remova um deles antes de trocar.");
+    setWeekTopicChoices(previous => ({ ...previous, [String(weekOffset)]: [...selectedTopicsThisWeek, matched.title] }));
+    setWeekTopicDraft("");
+    setToast(`${matched.title} entrou somente na semana ${weekOffset + 1}. As outras aulas e semanas foram preservadas.`);
+  }
+
+  function removeTopicFromVisibleWeek(topic: string) {
+    setWeekTopicChoices(previous => ({ ...previous, [String(weekOffset)]: selectedTopicsThisWeek.filter(item => item !== topic) }));
+    setToast(`${topic} foi retirado da semana ${weekOffset + 1}.`);
+  }
 
   function moveEvent(id: number, day: number) {
     setEvents(prev => prev.map(event => event.id === id ? { ...event, day } : event));
@@ -729,7 +753,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   }
 
   function eventLabel(type: AgendaEvent["type"]) {
-    return type === "rotation" ? "RODÍZIO" : type === "cards" ? "FLASHCARDS" : type === "review" ? "REVISÃO ATIVA" : type === "questions" ? "QUESTÕES" : type === "mock" ? "PROVA COMPLETA" : type === "correction" ? "CORREÇÃO" : "TEORIA";
+    return type === "rotation" ? "RODÍZIO" : type === "cards" ? "FLASHCARDS" : type === "review" ? "REVISÃO ATIVA" : type === "questions" ? "QUESTÕES" : type === "materials" ? "MATERIAIS" : type === "mock" ? "PROVA COMPLETA" : type === "correction" ? "CORREÇÃO" : "TEORIA";
   }
 
   function markEventStudied(id: number, topic: string) {
@@ -746,12 +770,17 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
 
   return <div className="page-stack">
     {focusArea && <section className="focus-banner"><div><span className="section-kicker">EIXO DA SEMANA · NÃO EXCLUSIVO</span><h2>{focusArea} · {focusPercentage}% da rota</h2><p>Os outros {100 - focusPercentage}% intercalam temas de outras áreas conforme as bancas. A sequência segue teoria → questões → revisão ativa.</p>{weeklyTopics.length > 0 && <small>Assuntos fixados por você: {weeklyTopics.join(" · ")}</small>}</div><span><Sparkles size={16} /> plano misto e editável</span></section>}
-    <section className="methodology-banner"><div><RefreshCw size={23} /><span><strong>Revisão espaçada que reage ao último resultado</strong><p>&lt;50%: 3 → 4 → 7 → 14 → 30 dias · 50–69%: 4 → 7 → 14 → 30 dias · ≥70%: 5 → 10 → 21 → 30 dias. Uma queda posterior encurta novamente os intervalos.</p></span></div></section>
+    <section className="methodology-banner"><div><RefreshCw size={23} /><span><strong>4 aulas por semana + revisão que reage ao último resultado</strong><p>D1: 2 aulas · D2: 2 aulas e materiais · D3: primeiros blocos de 15 questões · depois, revisões + flashcards diários. &lt;50%: 3 → 4 → 7 → 14 → 30 dias · 50–69%: 4 → 7 → 14 → 30 dias · ≥70%: 5 → 10 → 21 → 30 dias.</p></span></div></section>
     <section className="rotation-banner">
       <div className="rotation-symbol"><Stethoscope size={23} /></div>
       <div className="rotation-copy"><span className="section-kicker">INTERNATO</span><h2>{rotation.area === "Nenhum rodízio cadastrado" ? rotation.area : `Rodízio de ${rotation.area}`}</h2><p>{rotation.area === "Nenhum rodízio cadastrado" ? "Informe sua área e o período para o GPS aproximar teoria e prática." : `Durante o período escolhido, ${rotation.boost}% da carga flexível será direcionada ao rodízio.`}</p></div>
       <div className="rotation-balance"><div><i style={{ width: `${rotation.boost}%` }} /></div><span><b>{rotation.boost}%</b> internato <b>{100 - rotation.boost}%</b> prova</span></div>
       <button className="outline-button" onClick={() => setRotationOpen(true)}><Settings size={16} /> Editar rodízio</button>
+    </section>
+
+    <section className="panel week-topic-editor">
+      <div><span className="section-kicker">ESCOLHAS DA SEMANA {weekOffset + 1}</span><h2>{weekOffset < 4 ? "Escolha até 4 assuntos" : "Semana de consolidação"}</h2><p>{weekOffset < 4 ? "Cada escolha ocupa uma das 4 aulas. As vagas que você não preencher continuam automáticas pela grande área e pelas bancas, sem alterar outras semanas." : "Da semana 5 em diante, o calendário prioriza revisões espaçadas, flashcards e simulados."}</p></div>
+      {weekOffset < 4 && <div className="week-topic-controls"><div><input list="week-topic-options" value={weekTopicDraft} onChange={event => setWeekTopicDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addTopicToVisibleWeek(); }} placeholder="Busque um assunto" /><datalist id="week-topic-options">{topicBank.map(topic => <option key={topic.id} value={topic.title}>{topic.area}</option>)}</datalist><button onClick={addTopicToVisibleWeek}><Plus size={15} /> Incluir nesta semana</button></div><div className="weekly-topic-chips">{selectedTopicsThisWeek.length ? selectedTopicsThisWeek.map(topic => <span key={topic}>{topic}<button onClick={() => removeTopicFromVisibleWeek(topic)} aria-label={`Remover ${topic}`}><X size={13} /></button></span>) : <small>Nenhum assunto fixado; as 4 aulas serão automáticas.</small>}</div></div>}
     </section>
 
     <section className="panel agenda-panel">
@@ -772,13 +801,13 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       </div>
     </section>
 
-    <div className="three-cards"><MetricCard icon={<Gauge />} label="Aulas da semana" value={String(events.filter(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7).length)} note="2h por aula" /><MetricCard icon={<Stethoscope />} label="Mistura planejada" value={`${focusPercentage}/${100 - focusPercentage}`} note="área-foco / outras áreas" /><MetricCard icon={<Layers3 />} label="Flashcards" value="todos os dias" note={`${Math.max(10, dailyCards)} cards adaptativos`} /></div>
+    <div className="three-cards"><MetricCard icon={<Gauge />} label="Aulas da semana" value={String(events.filter(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7).length)} note="meta de 4 · cerca de 2h cada" /><MetricCard icon={<Stethoscope />} label="Mistura planejada" value={`${focusPercentage}/${100 - focusPercentage}`} note="área-foco / outras áreas" /><MetricCard icon={<Layers3 />} label="Flashcards" value="todos os dias" note={`${Math.max(10, dailyCards)} cards adaptativos`} /></div>
 
     {rotationOpen && <div className="modal-backdrop" onMouseDown={() => setRotationOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Editar rodízio" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">SINCRONIZAR INTERNATO</span><h2>Qual é seu rodízio atual?</h2><p>Ao aplicar, a grande área correspondente vira o foco da semana e os assuntos são ordenados pelas bancas.</p></div><button className="icon-button" onClick={() => setRotationOpen(false)}><X size={20} /></button></div><div className="rotation-form"><label>Área<select value={rotation.area} onChange={e => setRotation({ ...rotation, area: e.target.value })}><option>Nenhum rodízio cadastrado</option><option>Ginecologia e Obstetrícia</option><option>Clínica Médica</option><option>Cirurgia</option><option>Pediatria</option><option>Saúde Coletiva</option><option>Emergência</option></select></label><div className="two-fields"><label>Início<input type="date" value={rotation.start} onChange={e => setRotation({ ...rotation, start: e.target.value })} /></label><label>Fim<input type="date" value={rotation.end} onChange={e => setRotation({ ...rotation, end: e.target.value })} /></label></div><label className="range-label"><span><b>Quanto priorizar o rodízio?</b><strong>{rotation.boost}%</strong></span><input type="range" min="20" max="70" step="5" value={rotation.boost} onChange={e => setRotation({ ...rotation, boost: Number(e.target.value) })} /><small>O restante continua direcionado à incidência das suas bancas.</small></label></div><div className="modal-actions"><button className="text-button" onClick={() => setRotationOpen(false)}>Cancelar</button><button className="primary-button" onClick={applyRotation}><RefreshCw size={16} /> Aplicar à agenda</button></div></div></div>}
 
-    {addOpen && <div className="modal-backdrop" onMouseDown={() => setAddOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Adicionar bloco" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">AGENDA LIVRE</span><h2>Novo bloco de estudo</h2><p>Adicione qualquer assunto, mesmo fora da área-foco.</p></div><button className="icon-button" onClick={() => setAddOpen(false)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="agenda-topic-options" value={newBlock.topic} onChange={e => setNewBlock({ ...newBlock, topic: e.target.value })} placeholder="Ex.: Rotura prematura de membranas" /><datalist id="agenda-topic-options">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={newBlock.day} onChange={e => setNewBlock({ ...newBlock, day: Number(e.target.value) })}>{visibleDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={newBlock.type} onChange={e => setNewBlock({ ...newBlock, type: e.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção de prova</option></select></label></div><label className="plain-field">Duração ou volume<input value={newBlock.meta} onChange={e => setNewBlock({ ...newBlock, meta: e.target.value })} placeholder="Ex.: 15 questões · 1h" /></label><div className="modal-actions"><button className="text-button" onClick={() => setAddOpen(false)}>Cancelar</button><button className="primary-button" onClick={saveBlock}><Plus size={16} /> Adicionar à agenda</button></div></div></div>}
+    {addOpen && <div className="modal-backdrop" onMouseDown={() => setAddOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Adicionar bloco" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">AGENDA LIVRE</span><h2>Novo bloco de estudo</h2><p>Adicione qualquer assunto, mesmo fora da área-foco.</p></div><button className="icon-button" onClick={() => setAddOpen(false)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="agenda-topic-options" value={newBlock.topic} onChange={e => setNewBlock({ ...newBlock, topic: e.target.value })} placeholder="Ex.: Rotura prematura de membranas" /><datalist id="agenda-topic-options">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={newBlock.day} onChange={e => setNewBlock({ ...newBlock, day: Number(e.target.value) })}>{visibleDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={newBlock.type} onChange={e => setNewBlock({ ...newBlock, type: e.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="materials">Materiais</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção de prova</option></select></label></div><label className="plain-field">Duração ou volume<input value={newBlock.meta} onChange={e => setNewBlock({ ...newBlock, meta: e.target.value })} placeholder="Ex.: 15 questões · 1h" /></label><div className="modal-actions"><button className="text-button" onClick={() => setAddOpen(false)}>Cancelar</button><button className="primary-button" onClick={saveBlock}><Plus size={16} /> Adicionar à agenda</button></div></div></div>}
 
-    {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">EDITAR CRONOGRAMA</span><h2>Alterar bloco</h2><p>Você não fica restrito às sugestões automáticas.</p></div><button className="icon-button" onClick={() => setEditingEvent(null)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="edit-agenda-topics" value={editingEvent.topic} onChange={event => setEditingEvent({ ...editingEvent, topic: event.target.value })} /><datalist id="edit-agenda-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={editingEvent.day} onChange={event => setEditingEvent({ ...editingEvent, day: Number(event.target.value) })}>{calendarDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={editingEvent.type} onChange={event => setEditingEvent({ ...editingEvent, type: event.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção</option></select></label></div><label className="plain-field">Duração ou volume<input value={editingEvent.meta} onChange={event => setEditingEvent({ ...editingEvent, meta: event.target.value })} /></label><div className="modal-actions split-actions"><button className="danger-button" onClick={() => removeEvent(editingEvent.id)}><Trash2 size={15} /> Excluir</button><button className="primary-button" onClick={saveEditedEvent}><Check size={16} /> Salvar alteração</button></div></div></div>}
+    {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">EDITAR CRONOGRAMA</span><h2>Alterar bloco</h2><p>Você não fica restrito às sugestões automáticas.</p></div><button className="icon-button" onClick={() => setEditingEvent(null)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="edit-agenda-topics" value={editingEvent.topic} onChange={event => setEditingEvent({ ...editingEvent, topic: event.target.value })} /><datalist id="edit-agenda-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={editingEvent.day} onChange={event => setEditingEvent({ ...editingEvent, day: Number(event.target.value) })}>{calendarDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={editingEvent.type} onChange={event => setEditingEvent({ ...editingEvent, type: event.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="materials">Materiais</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção</option></select></label></div><label className="plain-field">Duração ou volume<input value={editingEvent.meta} onChange={event => setEditingEvent({ ...editingEvent, meta: event.target.value })} /></label><div className="modal-actions split-actions"><button className="danger-button" onClick={() => removeEvent(editingEvent.id)}><Trash2 size={15} /> Excluir</button><button className="primary-button" onClick={saveEditedEvent}><Check size={16} /> Salvar alteração</button></div></div></div>}
   </div>;
 }
 

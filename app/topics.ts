@@ -210,7 +210,7 @@ const examQuestionTemplates = [
  * Banco autoral unificado em estilo de prova. São 5 ângulos de cobrança para
  * cada um dos 181 assuntos (905 cartões), sem reproduzir questões protegidas.
  */
-export const examFocusedCardDeck = topicBank.flatMap(topic =>
+const broadExamFocusedCards = topicBank.flatMap(topic =>
   examQuestionTemplates.map((template, templateIndex) => ({
     id: `prova-${topic.id}-${templateIndex}`,
     topic: topic.title,
@@ -221,5 +221,42 @@ export const examFocusedCardDeck = topicBank.flatMap(topic =>
     examFocused: true as const,
   }))
 );
+
+const unifiedPriorityPools = [
+  bankPriorities.find(bank => bank.key === "sespe")?.topics ?? [],
+  bankPriorities.find(bank => bank.key === "enare")?.topics ?? [],
+  bankPriorities.find(bank => bank.key === "iamspe")?.topics ?? [],
+];
+
+const examContexts = [
+  { label: "ambulatório", cue: "priorize risco, diagnóstico provável e seguimento seguro" },
+  { label: "urgência", cue: "priorize gravidade, estabilização e a primeira conduta que muda desfecho" },
+  { label: "complicação", cue: "reconheça o sinal de alarme, confirme quando necessário e trate sem atraso" },
+  { label: "população especial", cue: "considere idade, gestação, comorbidades e contraindicações" },
+] as const;
+
+/**
+ * Mais 600 cartões: 10 temas prioritários x 5 habilidades x 4 contextos para
+ * cada um dos três sinais de prova solicitados. A origem é usada somente para
+ * compor a incidência; na interface todos aparecem no mesmo banco.
+ */
+const additionalUnifiedExamCards = unifiedPriorityPools.flatMap((topics, poolIndex) =>
+  topics.flatMap((title, topicIndex) => {
+    const matchedTopic = topicBank.find(topic => topic.title === title) ?? topicBank[(poolIndex * 10 + topicIndex) % topicBank.length];
+    return examQuestionTemplates.flatMap((template, templateIndex) =>
+      examContexts.map((context, contextIndex) => ({
+        id: `prova-prioritaria-${poolIndex}-${topicIndex}-${templateIndex}-${contextIndex}`,
+        topic: matchedTopic.title,
+        area: matchedTopic.area,
+        skill: template.skill,
+        front: `Cenário de ${context.label}: ${template.front(matchedTopic.title)}`,
+        back: `${template.back} Neste contexto, ${context.cue}.`,
+        examFocused: true as const,
+      }))
+    );
+  })
+);
+
+export const examFocusedCardDeck = [...broadExamFocusedCards, ...additionalUnifiedExamCards];
 
 export const medicalCardDeck = [...curatedCards, ...activeRecallCards, ...examFocusedCardDeck];
