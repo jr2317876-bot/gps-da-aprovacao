@@ -68,7 +68,7 @@ export const topicBank: StudyTopic[] = Object.entries(byArea).flatMap(([area, ti
   titles.map((title, index) => ({ id: `${area}-${index}`, area: area as StudyTopic["area"], title }))
 );
 
-export type BankKey = "sespe" | "enare" | "sussp" | "psumg" | "uspsp" | "usprp" | "unicamp" | "unifesp" | "iamspe";
+export type BankKey = "sespe" | "enamed" | "enare" | "sussp" | "psumg" | "uspsp" | "usprp" | "unicamp" | "unifesp" | "iamspe";
 
 export type BankPriority = {
   key: BankKey;
@@ -85,6 +85,11 @@ export const bankPriorities: BankPriority[] = [
     key: "sespe", name: "SES-PE", short: "Pernambuco", style: "Epidemiologia, perioperatório e temas práticos recorrentes.",
     sourceLabel: "levantamentos de provas recentes da SES-PE", sourceUrl: "https://www.eumedicoresidente.com.br/post/assuntos-mais-cobrados-residencia-medica-ses-pe",
     topics: ["Indicadores de Morbimortalidade", "Cuidados Pré-operatórios", "Imunizações", "Estudos Epidemiológicos: Classificação", "Abdome Agudo Inflamatório", "Afecções Benignas das Vias Biliares", "Assistência ao Parto", "Sangramento da Primeira Metade da Gestação", "Ética Médica, Bioética e Documentação", "Diabetes"]
+  },
+  {
+    key: "enamed", name: "ENAMED", short: "Exame Nacional", style: "Competências essenciais das cinco grandes áreas, raciocínio clínico, prevenção e segurança.",
+    sourceLabel: "matriz oficial do ENAMED", sourceUrl: "https://www.gov.br/inep/pt-br/areas-de-atuacao/avaliacao-e-exames-educacionais/enamed",
+    topics: ["Atenção Primária à Saúde", "Ética Médica, Bioética e Documentação", "Síndrome Coronariana e Diagnósticos Diferenciais", "Sepse, Choque Séptico e Outros Tipos de Choque", "Abdome Agudo Inflamatório", "Abordagem Inicial (xABCDE)", "Pré-Natal", "Assistência ao Parto", "Imunizações", "Crescimento e Desenvolvimento na Infância e Adolescência"]
   },
   {
     key: "enare", name: "ENARE", short: "Nacional", style: "APS, clínica frequente, urgências e condutas objetivas.",
@@ -163,7 +168,183 @@ const activeRecallCards = topicBank.flatMap(topic => [
     area: topic.area,
     front: `Monte uma vinheta clínica de ${topic.title}: qual pista separa o diagnóstico principal do diferencial mais perigoso?`,
     back: "Identifique a pista discriminativa, o exame que muda conduta, a primeira medida segura e o erro clássico de prova. Se não conseguir explicar em 60 segundos, marque como Difícil."
+  },
+  {
+    topic: topic.title,
+    area: topic.area,
+    front: `Questão de prova sobre ${topic.title}: quais dados mudariam sua conduta imediata e quais seriam apenas distratores?`,
+    back: "Separe gravidade e instabilidade, critérios diagnósticos, contraindicações e o próximo passo que altera desfecho. Depois identifique os dados que não modificam a decisão clínica."
+  },
+  {
+    topic: topic.title,
+    area: topic.area,
+    front: `Em ${topic.title}, qual é a sequência correta entre suspeita, confirmação, primeira conduta e tratamento definitivo?`,
+    back: "Responda em quatro etapas: reconhecimento clínico, exame confirmatório quando necessário, estabilização ou medida inicial e tratamento definitivo. Compare com seu material e transforme qualquer falha em um card específico."
   }
 ]);
 
-export const medicalCardDeck = [...curatedCards, ...activeRecallCards];
+const examQuestionTemplates = [
+  {
+    skill: "Diagnóstico",
+    front: (title: string) => `Vinheta de prova sobre ${title}: quais pistas clínicas sustentam o diagnóstico e qual achado obrigaria você a mudar a hipótese?`,
+    back: "Responda em três partes: síndrome apresentada, pistas discriminativas e principal diagnóstico alternativo perigoso. Em seguida, diga qual dado clínico ou exame separa as duas hipóteses."
+  },
+  {
+    skill: "Próximo passo",
+    front: (title: string) => `Em uma questão sobre ${title}, como decidir entre estabilizar, investigar ou tratar imediatamente?`,
+    back: "Primeiro procure instabilidade e sinais de gravidade. Depois identifique se existe diagnóstico clínico suficiente, se um exame realmente muda a conduta e qual intervenção não pode ser atrasada."
+  },
+  {
+    skill: "Conduta",
+    front: (title: string) => `A banca confirmou ${title}. Qual é a conduta inicial, o tratamento definitivo e o critério de internação ou encaminhamento?`,
+    back: "Organize a resposta em: suporte inicial, tratamento específico, destino do paciente e monitorização. Diferencie a conduta do caso estável daquela exigida por gravidade, complicação ou contraindicação."
+  },
+  {
+    skill: "Armadilha",
+    front: (title: string) => `Qual erro de prova é mais provável em ${title}: pedir exame demais, atrasar uma conduta ou escolher tratamento contraindicado?`,
+    back: "Revise o ponto de decisão: o que já pode ser concluído pela clínica, qual exame altera manejo, qual medida vem primeiro e quais condições tornam a alternativa aparentemente correta inadequada."
+  },
+  {
+    skill: "Integração",
+    front: (title: string) => `Transforme ${title} em uma questão completa: fator de risco, apresentação, exame-chave, conduta e prevenção ou seguimento.`,
+    back: "Construa uma cadeia causal curta e coerente. Se algum elo não vier à memória em até 60 segundos, reveja esse trecho no material-base e crie um cartão factual específico para a lacuna."
+  }
+] as const;
+
+/**
+ * Banco autoral unificado em estilo de prova. São 5 ângulos de cobrança para
+ * cada um dos 181 assuntos (905 cartões), sem reproduzir questões protegidas.
+ */
+const broadExamFocusedCards = topicBank.flatMap(topic =>
+  examQuestionTemplates.map((template, templateIndex) => ({
+    id: `prova-${topic.id}-${templateIndex}`,
+    topic: topic.title,
+    area: topic.area,
+    skill: template.skill,
+    front: template.front(topic.title),
+    back: template.back,
+    examFocused: true as const,
+  }))
+);
+
+const unifiedPriorityPools = [
+  bankPriorities.find(bank => bank.key === "sespe")?.topics ?? [],
+  bankPriorities.find(bank => bank.key === "enare")?.topics ?? [],
+  bankPriorities.find(bank => bank.key === "iamspe")?.topics ?? [],
+];
+
+const examContexts = [
+  { label: "ambulatório", cue: "priorize risco, diagnóstico provável e seguimento seguro" },
+  { label: "urgência", cue: "priorize gravidade, estabilização e a primeira conduta que muda desfecho" },
+  { label: "complicação", cue: "reconheça o sinal de alarme, confirme quando necessário e trate sem atraso" },
+  { label: "população especial", cue: "considere idade, gestação, comorbidades e contraindicações" },
+] as const;
+
+/**
+ * Mais 600 cartões: 10 temas prioritários x 5 habilidades x 4 contextos para
+ * cada um dos três sinais de prova solicitados. A origem é usada somente para
+ * compor a incidência; na interface todos aparecem no mesmo banco.
+ */
+const additionalUnifiedExamCards = unifiedPriorityPools.flatMap((topics, poolIndex) =>
+  topics.flatMap((title, topicIndex) => {
+    const matchedTopic = topicBank.find(topic => topic.title === title) ?? topicBank[(poolIndex * 10 + topicIndex) % topicBank.length];
+    return examQuestionTemplates.flatMap((template, templateIndex) =>
+      examContexts.map((context, contextIndex) => ({
+        id: `prova-prioritaria-${poolIndex}-${topicIndex}-${templateIndex}-${contextIndex}`,
+        topic: matchedTopic.title,
+        area: matchedTopic.area,
+        skill: template.skill,
+        front: `Cenário de ${context.label}: ${template.front(matchedTopic.title)}`,
+        back: `${template.back} Neste contexto, ${context.cue}.`,
+        examFocused: true as const,
+      }))
+    );
+  })
+);
+
+const generalPriorityTopics = [
+  ...new Set([
+    ...bankPriorities.flatMap(bank => bank.topics),
+    ...topicBank.map(topic => topic.title),
+  ])
+].slice(0, 60);
+
+const generalExamTemplates = [
+  {
+    skill: "Comparação de casos",
+    front: (title: string) => `A prova apresenta dois pacientes com ${title}. Qual diferença entre os casos muda diagnóstico, gravidade ou conduta?`,
+    back: "Compare idade e contexto, estabilidade, tempo de evolução, sinais de alarme, comorbidades e contraindicações. A resposta correta costuma depender do dado que realmente muda a decisão, não do detalhe mais chamativo."
+  },
+  {
+    skill: "Interpretação",
+    front: (title: string) => `Em ${title}, o examinador fornece um resultado de exame. Como interpretar o achado sem separá-lo da probabilidade clínica?`,
+    back: "Defina a hipótese antes do exame, identifique se o resultado confirma, afasta ou apenas modifica a probabilidade e verifique se ele muda o próximo passo. Evite tratar um número isolado."
+  },
+  {
+    skill: "Alternativa decisiva",
+    front: (title: string) => `Entre alternativas muito parecidas sobre ${title}, qual critério objetivo deve decidir a resposta?`,
+    back: "Procure indicação, contraindicação, estabilidade, gravidade, momento da doença e objetivo da intervenção. Elimine opções verdadeiras em geral, mas inadequadas para o paciente e para o momento descritos."
+  },
+  {
+    skill: "Falha terapêutica",
+    front: (title: string) => `Após a primeira conduta para ${title}, o paciente não melhora. O que deve ser reavaliado antes de simplesmente trocar o tratamento?`,
+    back: "Reavalie diagnóstico e diferenciais, adesão ou execução, dose e tempo adequados, complicações, resistência quando aplicável e necessidade de escalonamento, internação ou abordagem definitiva."
+  },
+  {
+    skill: "Prevenção e segurança",
+    front: (title: string) => `Como uma banca pode cobrar prevenção, rastreamento, seguimento ou segurança do paciente dentro de ${title}?`,
+    back: "Recupere população-alvo, momento da intervenção, benefício esperado, contraindicações, periodicidade quando houver e prevenção de iatrogenias. Diferencie rastreamento de investigação em pessoa sintomática."
+  }
+] as const;
+
+/** 300 cartões gerais inéditos: 60 temas prioritários x 5 novos ângulos. */
+const newGeneralExamCards = generalPriorityTopics.flatMap((title, topicIndex) => {
+  const matchedTopic = topicBank.find(topic => topic.title === title) ?? topicBank[topicIndex % topicBank.length];
+  return generalExamTemplates.map((template, templateIndex) => ({
+    id: `prova-geral-nova-${topicIndex}-${templateIndex}`,
+    topic: matchedTopic.title,
+    area: matchedTopic.area,
+    skill: template.skill,
+    front: template.front(matchedTopic.title),
+    back: template.back,
+    examFocused: true as const,
+  }));
+});
+
+const tenBankExpansionTemplates = [
+  {
+    skill: "Prioridade em cascata",
+    front: (title: string) => `Em uma vinheta complexa sobre ${title}, quais três decisões devem ser tomadas em ordem para evitar atraso de diagnóstico ou tratamento?`,
+    back: "Ordene a resposta em: reconhecer gravidade e estabilizar; confirmar apenas o que muda a conduta; instituir tratamento e destino adequados. A alternativa correta respeita a sequência temporal do caso."
+  },
+  {
+    skill: "Exceção cobrada",
+    front: (title: string) => `Qual exceção, contraindicação ou apresentação atípica de ${title} tem maior chance de transformar uma alternativa aparentemente correta em errada?`,
+    back: "Revise população especial, estabilidade, comorbidades, janela temporal, contraindicações e critérios de gravidade. Identifique a palavra da vinheta que impede aplicar a regra geral."
+  },
+  {
+    skill: "Reavaliação objetiva",
+    front: (title: string) => `Após a conduta inicial em ${title}, qual parâmetro clínico, laboratorial ou de imagem deve ser reavaliado e o que define sucesso ou escalonamento?`,
+    back: "Defina o marcador de resposta, o intervalo coerente, o sinal de falha e a próxima medida. Em prova, não basta iniciar o tratamento: é preciso reconhecer quando manter, trocar, intervir ou encaminhar."
+  }
+] as const;
+
+/** 300 cartões inéditos: 10 bancas x 10 prioridades x 3 novos ângulos. */
+const tenBankExpansionCards = bankPriorities.flatMap((bank, bankIndex) =>
+  bank.topics.slice(0, 10).flatMap((title, topicIndex) => {
+    const matchedTopic = topicBank.find(topic => topic.title === title) ?? topicBank[(bankIndex * 10 + topicIndex) % topicBank.length];
+    return tenBankExpansionTemplates.map((template, templateIndex) => ({
+      id: `prova-10-bancas-${bank.key}-${topicIndex}-${templateIndex}`,
+      topic: matchedTopic.title,
+      area: matchedTopic.area,
+      skill: template.skill,
+      front: `Ênfase de cobrança: ${bank.style} ${template.front(matchedTopic.title)}`,
+      back: template.back,
+      examFocused: true as const,
+    }));
+  })
+);
+
+export const examFocusedCardDeck = [...broadExamFocusedCards, ...additionalUnifiedExamCards, ...newGeneralExamCards, ...tenBankExpansionCards];
+
+export const medicalCardDeck = [...curatedCards, ...activeRecallCards, ...examFocusedCardDeck];
