@@ -111,6 +111,32 @@ type AgendaEvent = {
 
 type RotationState = { area: string; start: string; end: string; boost: number };
 
+type MentorshipCheckin = {
+  id: number;
+  date: string;
+  lessonsDone: number;
+  lessonGoal: number;
+  questionsDone: number;
+  questionGoal: number;
+  adherence: number;
+  accuracy: number | null;
+  feedback: string;
+};
+
+type ResidencySpecialty = "Neurologia" | "Clínica Médica" | "Cirurgia Geral" | "Oftalmologia" | "Otorrinolaringologia" | "Radiologia";
+type ResidencyProgram = {
+  id: string;
+  institution: string;
+  hospital: string;
+  location: string;
+  process: string;
+  scale: "0–10" | "0–100" | "0–1000";
+  year: number;
+  profile: string;
+  sourceUrl: string;
+  cutoffs: Record<ResidencySpecialty, number>;
+};
+
 type Profile = { id: string; name: string; color: string };
 type BankWeights = Record<BankKey, number>;
 type PrioritySuggestion = { topic: string; area: StudyTopic["area"]; score: number; rank: number; questions: number; sourceBank: string };
@@ -120,11 +146,51 @@ type MainCloudState = {
   done?: number[]; target?: number; hours?: number; safety?: number; banks?: Partial<BankWeights>;
   questionLogs?: QuestionLog[]; studiedTopics?: string[]; focusArea?: FocusArea; weeklyTopics?: string[];
   currentTopic?: string; recalculated?: boolean; mockExams?: MockExamRecord[]; focusPercentage?: number; mockExamCadence?: 3 | 4;
+  weeklyLessonGoal?: number; weeklyQuestionGoal?: number; mentorshipCheckins?: MentorshipCheckin[];
 };
 
 const DEFAULT_PROFILES: Profile[] = [{ id: "joao", name: "João", color: "#0f8f77" }];
 const DEFAULT_BANKS: BankWeights = { sespe: 0, enare: 0, sussp: 0, psumg: 0, uspsp: 0, usprp: 0, unicamp: 0, unifesp: 0, iamspe: 0 };
 const STUDY_AREAS: StudyTopic["area"][] = ["Clínica Médica", "Cirurgia", "Ginecologia e Obstetrícia", "Pediatria", "Preventiva"];
+const RESIDENCY_SPECIALTIES: ResidencySpecialty[] = ["Neurologia", "Clínica Médica", "Cirurgia Geral", "Oftalmologia", "Otorrinolaringologia", "Radiologia"];
+const residencyPrograms: ResidencyProgram[] = [
+  {
+    id: "usp-sp", institution: "USP-SP", hospital: "Hospital das Clínicas da FMUSP", location: "São Paulo · SP", process: "Seleção própria", scale: "0–100", year: 2026,
+    profile: "Hospital universitário de alta complexidade, forte ambiente acadêmico e ampla rede de institutos.",
+    sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
+    cutoffs: { "Neurologia": 82, "Clínica Médica": 83, "Cirurgia Geral": 85, "Oftalmologia": 85, "Otorrinolaringologia": 86, "Radiologia": 80 },
+  },
+  {
+    id: "usp-rp", institution: "USP-RP", hospital: "Hospital das Clínicas de Ribeirão Preto", location: "Ribeirão Preto · SP", process: "Seleção própria", scale: "0–10", year: 2026,
+    profile: "Hospital universitário terciário com integração entre assistência, ensino e pesquisa.",
+    sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
+    cutoffs: { "Neurologia": 7.2, "Clínica Médica": 7, "Cirurgia Geral": 7.2, "Oftalmologia": 7.2, "Otorrinolaringologia": 7.4, "Radiologia": 6.6 },
+  },
+  {
+    id: "unicamp", institution: "UNICAMP", hospital: "Hospital de Clínicas da UNICAMP", location: "Campinas · SP", process: "Seleção própria", scale: "0–10", year: 2026,
+    profile: "Centro universitário terciário com rede de referência regional e formação acadêmico-assistencial.",
+    sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
+    cutoffs: { "Neurologia": 7.7, "Clínica Médica": 7.3, "Cirurgia Geral": 7.7, "Oftalmologia": 7.8, "Otorrinolaringologia": 7.5, "Radiologia": 7.5 },
+  },
+  {
+    id: "iamspe", institution: "IAMSPE", hospital: "Hospital do Servidor Público Estadual", location: "São Paulo · SP", process: "Seleção IAMSPE", scale: "0–10", year: 2026,
+    profile: "Hospital geral de grande porte ligado à rede assistencial dos servidores públicos estaduais.",
+    sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
+    cutoffs: { "Neurologia": 8.5, "Clínica Médica": 8.4, "Cirurgia Geral": 8.6, "Oftalmologia": 8.6, "Otorrinolaringologia": 8.7, "Radiologia": 8.3 },
+  },
+  {
+    id: "sus-sp", institution: "SUS-SP", hospital: "Rede de instituições participantes", location: "Estado de São Paulo", process: "SUS-SP", scale: "0–100", year: 2026,
+    profile: "Processo unificado: o cenário formativo muda conforme o hospital escolhido e a posição na classificação.",
+    sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
+    cutoffs: { "Neurologia": 76, "Clínica Médica": 69, "Cirurgia Geral": 72, "Oftalmologia": 76, "Otorrinolaringologia": 76, "Radiologia": 73 },
+  },
+  {
+    id: "hgf-enare", institution: "HGF · ENARE", hospital: "Hospital Geral de Fortaleza", location: "Fortaleza · CE", process: "ENARE", scale: "0–1000", year: 2026,
+    profile: "Hospital público terciário; referência útil para comparar programas de alta procura dentro do ENARE.",
+    sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-enare/",
+    cutoffs: { "Neurologia": 890, "Clínica Médica": 870, "Cirurgia Geral": 900, "Oftalmologia": 935, "Otorrinolaringologia": 910, "Radiologia": 880 },
+  },
+];
 
 const initialTasks: Task[] = [
   { id: 1, area: "CONFIGURAÇÃO", topic: "Escolher bancas e definir a meta", kind: "Primeiro passo", duration: 10, questions: 1, unit: "etapa", reason: "A incidência das bancas define o que vem primeiro", color: "purple" },
@@ -142,6 +208,8 @@ const topicRows = [
 
 const nav = [
   ["Hoje", LayoutDashboard],
+  ["Mentoria", GraduationCap],
+  ["Hospitais", Stethoscope],
   ["Meu plano", Route],
   ["Flashcards", Layers3],
   ["Questões", ListChecks],
@@ -193,6 +261,9 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
   const [todayIndex, setTodayIndex] = useState(0);
+  const [weeklyLessonGoal, setWeeklyLessonGoal] = useState(4);
+  const [weeklyQuestionGoal, setWeeklyQuestionGoal] = useState(60);
+  const [mentorshipCheckins, setMentorshipCheckins] = useState<MentorshipCheckin[]>([]);
   const mainSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const agendaHomeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const activeProfile = profiles.find(profile => profile.id === activeProfileId) ?? profiles[0] ?? DEFAULT_PROFILES[0];
@@ -242,10 +313,13 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
           setMockExamCadence(parsed.mockExamCadence ?? 4);
           setWeeklyTopics(parsed.weeklyTopics ?? (legacyTopic ? [legacyTopic] : []));
           setMockExams(parsed.mockExams ?? []);
+          setWeeklyLessonGoal(parsed.weeklyLessonGoal ?? 4);
+          setWeeklyQuestionGoal(parsed.weeklyQuestionGoal ?? 60);
+          setMentorshipCheckins(parsed.mentorshipCheckins ?? []);
           setRecalculated(parsed.recalculated ?? false);
         } else {
           setDone([]); setTarget(0); setHours(0); setSafety(0); setBanks(DEFAULT_BANKS);
-          setQuestionLogs([]); setStudiedTopics([]); setFocusArea(""); setFocusPercentage(70); setMockExamCadence(4); setWeeklyTopics([]); setMockExams([]); setRecalculated(false);
+          setQuestionLogs([]); setStudiedTopics([]); setFocusArea(""); setFocusPercentage(70); setMockExamCadence(4); setWeeklyTopics([]); setMockExams([]); setWeeklyLessonGoal(4); setWeeklyQuestionGoal(60); setMentorshipCheckins([]); setRecalculated(false);
         }
         setHydrated(true);
         setSaveStatus(result?.error ? "error" : "saved");
@@ -259,7 +333,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   useEffect(() => {
     if (!appReady || !hydrated || !supabase || activeProfileId === "joao") return;
     const client = supabase;
-    const state = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, recalculated };
+    const state = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, recalculated };
     localStorage.setItem(`gps-main-state-${ownerId}-${activeProfileId}`, JSON.stringify(state));
     queueMicrotask(() => setSaveStatus("saving"));
     mainSaveQueue.current = mainSaveQueue.current.then(async () => {
@@ -267,7 +341,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       if (error) { setSaveStatus("error"); setToast(`Falha ao sincronizar: ${error.message}`); }
       else setSaveStatus("saved");
     });
-  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, recalculated, hydrated, appReady, activeProfileId, ownerId]);
+  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, recalculated, hydrated, appReady, activeProfileId, ownerId]);
 
   useEffect(() => {
     const timer = setTimeout(() => setTodayIndex((new Date().getDay() + 6) % 7), 0);
@@ -414,6 +488,8 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   }
 
   const sectionTitle: Record<string, string> = {
+    "Mentoria": "Seu acompanhamento semanal",
+    "Hospitais": "Mapa de residências por especialidade",
     "Meu plano": "Sua agenda inteligente",
     "Flashcards": "Flashcards do dia",
     "Questões": "Registro de questões",
@@ -530,7 +606,9 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
             </>
           ) : (
             <section className="secondary-page">
-              <div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO</p><h1>{sectionTitle[active]}</h1><p>Todos os dados abaixo conversam com sua rota diária e são recalculados conforme seu progresso.</p></div>{!(["Meu plano", "Flashcards", "Questões", "Assuntos", "Prioridades"].includes(active)) && <button className="primary-button" onClick={() => active === "Bancas e metas" ? setPlannerOpen(true) : setToast("Novo registro adicionado à sua fila.")}><Plus size={17} /> {active === "Bancas e metas" ? "Ajustar metas" : "Novo registro"}</button>}</div>
+              <div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO</p><h1>{sectionTitle[active]}</h1><p>Todos os dados abaixo conversam com sua rota diária e são recalculados conforme seu progresso.</p></div>{!(["Mentoria", "Hospitais", "Meu plano", "Flashcards", "Questões", "Assuntos", "Prioridades"].includes(active)) && <button className="primary-button" onClick={() => active === "Bancas e metas" ? setPlannerOpen(true) : setToast("Novo registro adicionado à sua fila.")}><Plus size={17} /> {active === "Bancas e metas" ? "Ajustar metas" : "Novo registro"}</button>}</div>
+              {active === "Mentoria" && <MentorshipPage agenda={agendaPreview} logs={questionLogs} focusArea={focusArea} target={target} probability={probability} lessonGoal={weeklyLessonGoal} questionGoal={weeklyQuestionGoal} setLessonGoal={setWeeklyLessonGoal} setQuestionGoal={setWeeklyQuestionGoal} checkins={mentorshipCheckins} setCheckins={setMentorshipCheckins} setToast={setToast} onOpenPlan={() => setActive("Meu plano")} />}
+              {active === "Hospitais" && <ResidencyProgramsPage />}
               {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyCards={dailyCards} mockExamCadence={mockExamCadence} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onMarkStudied={markTopicAsStudied} />}
               {active === "Flashcards" && <FlashcardsPage logs={questionLogs} exams={mockExams} banks={banks} dailyCards={dailyCards} setToast={setToast} profileId={activeProfileId} studiedTopics={studiedTopics} onOpenTopics={() => setActive("Assuntos")} onSaveStatus={setSaveStatus} />}
               {active === "Questões" && <QuestionsPage logs={questionLogs} setLogs={setQuestionLogs} setToast={setToast} setStudiedTopics={setStudiedTopics} />}
@@ -583,6 +661,103 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       )}
     </div>
   );
+}
+
+function MentorshipPage({ agenda, logs, focusArea, target, probability, lessonGoal, questionGoal, setLessonGoal, setQuestionGoal, checkins, setCheckins, setToast, onOpenPlan }: {
+  agenda: AgendaEvent[]; logs: QuestionLog[]; focusArea: FocusArea; target: number; probability: number;
+  lessonGoal: number; questionGoal: number; setLessonGoal: (value: number) => void; setQuestionGoal: (value: number) => void;
+  checkins: MentorshipCheckin[]; setCheckins: React.Dispatch<React.SetStateAction<MentorshipCheckin[]>>;
+  setToast: (message: string) => void; onOpenPlan: () => void;
+}) {
+  const currentWeekEvents = agenda.filter(event => event.day >= 0 && event.day < 7);
+  const scheduledLessons = currentWeekEvents.filter(event => event.type === "theory").length;
+  const completedLessons = currentWeekEvents.filter(event => event.type === "theory" && event.completed).length;
+  const volumeFromMeta = (meta: string) => Number(meta.match(/(\d+)\s*quest/i)?.[1] ?? 0);
+  const scheduledQuestions = currentWeekEvents.filter(event => event.type === "questions" || event.type === "review").reduce((sum, event) => sum + volumeFromMeta(event.meta), 0);
+  const completedAgendaQuestions = currentWeekEvents.filter(event => (event.type === "questions" || event.type === "review") && event.completed).reduce((sum, event) => sum + volumeFromMeta(event.meta), 0);
+  const monday = new Date(); monday.setHours(0, 0, 0, 0); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6); sunday.setHours(23, 59, 59, 999);
+  const weekLogs = logs.filter(log => {
+    if (log.date === "Hoje") return true;
+    const date = new Date(`${log.date}T12:00:00`);
+    return !Number.isNaN(date.getTime()) && date >= monday && date <= sunday;
+  });
+  const loggedQuestions = weekLogs.reduce((sum, log) => sum + log.questions, 0);
+  const questionsDone = Math.max(loggedQuestions, completedAgendaQuestions);
+  const weightedAccuracy = loggedQuestions ? Math.round(weekLogs.reduce((sum, log) => sum + log.questions * log.accuracy, 0) / loggedQuestions) : null;
+  const lessonProgress = Math.min(100, Math.round(completedLessons / Math.max(1, lessonGoal) * 100));
+  const questionProgress = Math.min(100, Math.round(questionsDone / Math.max(1, questionGoal) * 100));
+  const adherence = Math.round(lessonProgress * .4 + questionProgress * .6);
+  const suggestedLessonGoal = Math.max(4, scheduledLessons);
+  const suggestedQuestionGoal = Math.max(60, scheduledQuestions);
+  const weakest = weekLogs.slice().sort((a, b) => a.accuracy - b.accuracy)[0];
+
+  const feedback = !focusArea
+    ? "Defina a grande área da semana para o mentor digital conseguir comparar sua execução com uma rota real."
+    : adherence >= 90
+      ? `Semana muito consistente em ${focusArea}. Mantenha o volume e use o próximo bloco adaptativo no assunto de menor acerto${weakest ? `: ${weakest.topic}` : ""}.`
+      : lessonProgress >= 75 && questionProgress < 60
+        ? "A teoria avançou, mas faltou transformar conteúdo em recuperação ativa. Proteja primeiro os blocos de questões e flashcards já agendados."
+        : lessonProgress < 60
+          ? "A carga de teoria ficou abaixo da meta. Redistribua uma aula para o próximo espaço livre, sem apagar as revisões vencidas."
+          : "Você está em movimento, mas ainda abaixo da rota semanal. Complete o menor bloco pendente hoje para recuperar aderência sem sobrecarga.";
+
+  function saveCheckin() {
+    const entry: MentorshipCheckin = {
+      id: Date.now(), date: new Date().toISOString().slice(0, 10), lessonsDone: completedLessons, lessonGoal,
+      questionsDone, questionGoal, adherence, accuracy: weightedAccuracy, feedback,
+    };
+    setCheckins(previous => [entry, ...previous].slice(0, 16));
+    setToast("Check-in semanal salvo. O feedback também ficou guardado neste perfil.");
+  }
+
+  return <div className="page-stack mentorship-page">
+    <section className="mentorship-hero">
+      <div><span className="section-kicker">MENTOR DIGITAL · SEMANA ATUAL</span><h2>{focusArea ? `Rota de ${focusArea}` : "Sua rota ainda precisa de um foco"}</h2><p>Metas flexíveis, execução real e um feedback objetivo para decidir o próximo passo.</p><div className="mentorship-hero-actions"><button className="primary-button" onClick={onOpenPlan}><CalendarClock size={17} /> Abrir cronograma</button><button className="outline-button" onClick={saveCheckin}><ClipboardCheck size={17} /> Salvar check-in</button></div></div>
+      <div className="mentor-score"><small>ADERÊNCIA SEMANAL</small><strong>{adherence}%</strong><span>{adherence >= 80 ? "No caminho" : adherence >= 50 ? "Ajuste necessário" : "Semana em construção"}</span></div>
+    </section>
+
+    <section className="mentorship-goals">
+      <article className="panel mentorship-goal-card"><header><span><BookOpenCheck size={19} /></span><div><small>META DE AULAS</small><strong>{completedLessons} de {lessonGoal}</strong></div></header><div className="mentor-progress"><i style={{ width: `${lessonProgress}%` }} /></div><label>Meta semanal<input type="number" min="1" max="20" value={lessonGoal} onChange={event => setLessonGoal(Math.max(1, Number(event.target.value)))} /></label><p>{scheduledLessons ? `${scheduledLessons} aulas estão no cronograma desta semana.` : "Nenhuma aula foi gerada ainda."}</p></article>
+      <article className="panel mentorship-goal-card"><header><span><ListChecks size={19} /></span><div><small>META DE QUESTÕES</small><strong>{questionsDone} de {questionGoal}</strong></div></header><div className="mentor-progress"><i style={{ width: `${questionProgress}%` }} /></div><label>Meta semanal<input type="number" min="15" step="15" max="1000" value={questionGoal} onChange={event => setQuestionGoal(Math.max(15, Number(event.target.value)))} /></label><p>{scheduledQuestions ? `${scheduledQuestions} questões previstas entre D3 e revisões.` : "A meta começa em 60 e se adapta ao calendário."}</p></article>
+      <article className="panel mentorship-goal-card mentor-performance"><header><span><TrendingUp size={19} /></span><div><small>QUALIDADE DA PRÁTICA</small><strong>{weightedAccuracy === null ? "—" : `${weightedAccuracy}%`}</strong></div></header><div className="mentor-stat-row"><span>GPS Score <b>{probability}%</b></span><span>Meta de nota <b>{target ? `${target}%` : "—"}</b></span></div><p>{weakest ? `Atenção atual: ${weakest.topic} (${weakest.accuracy}%).` : "Registre questões para liberar a análise de desempenho."}</p></article>
+    </section>
+
+    <section className="panel mentor-feedback"><div className="mentor-avatar"><GraduationCap size={24} /></div><div><span className="section-kicker">FEEDBACK DA SEMANA</span><h2>{adherence >= 80 ? "Boa execução. Agora refine." : "Próximo ajuste prioritário"}</h2><p>{feedback}</p><div className="mentor-actions"><span><Check size={14} /> Preserve flashcards todos os dias</span><span><Check size={14} /> Não pule revisão vencida</span>{weakest && <span><Target size={14} /> Refaça um bloco curto de {weakest.topic}</span>}</div></div></section>
+
+    <section className="panel mentor-recommendation"><div><span className="section-kicker">META SUGERIDA PELO CRONOGRAMA</span><h2>{suggestedLessonGoal} aulas · {suggestedQuestionGoal} questões</h2><p>A sugestão lê os blocos da semana; você continua livre para alterar as duas metas.</p></div><button className="outline-button" onClick={() => { setLessonGoal(suggestedLessonGoal); setQuestionGoal(suggestedQuestionGoal); setToast("Metas alinhadas ao cronograma atual."); }}><RefreshCw size={16} /> Usar sugestão</button></section>
+
+    <section className="panel mentor-history"><div className="panel-title"><div><h2>Histórico de check-ins</h2><p>Um registro semanal para enxergar tendência, não apenas um dia isolado.</p></div></div>{checkins.length ? <div>{checkins.map(item => <article key={item.id}><time>{item.date.split("-").reverse().join("/")}</time><strong>{item.adherence}% de aderência</strong><span>{item.lessonsDone}/{item.lessonGoal} aulas · {item.questionsDone}/{item.questionGoal} questões · acerto {item.accuracy === null ? "—" : `${item.accuracy}%`}</span><p>{item.feedback}</p></article>)}</div> : <EmptyMini icon={<ClipboardCheck size={22} />} title="Nenhum check-in salvo" text="Ao fim da semana, salve o retrato das metas e do feedback." />}</section>
+
+    <p className="mentor-method-note">Modelo inspirado em acompanhamento por metas flexíveis e métricas de execução. Referências de produto: <a href="https://www.medway.com.br/conteudos/por-que-fazer-mentoria-para-residencia-medica/" target="_blank" rel="noreferrer">Medway</a> e <a href="https://medgrupo.com.br/mentoria/" target="_blank" rel="noreferrer">MEDGRUPO</a>. O feedback é automático e não substitui orientação pedagógica humana.</p>
+  </div>;
+}
+
+function ResidencyProgramsPage() {
+  const [specialty, setSpecialty] = useState<ResidencySpecialty>("Neurologia");
+  const scaleMaximum = (scale: ResidencyProgram["scale"]) => scale === "0–10" ? 10 : scale === "0–100" ? 100 : 1000;
+  const safeTarget = (program: ResidencyProgram) => {
+    const extra = program.scale === "0–10" ? .3 : program.scale === "0–100" ? 3 : 30;
+    return Math.min(scaleMaximum(program.scale), program.cutoffs[specialty] + extra);
+  };
+  const formatScore = (value: number, scale: ResidencyProgram["scale"]) => scale === "0–10" ? value.toFixed(1).replace(".", ",") : String(Math.round(value));
+  const pressure = (program: ResidencyProgram) => {
+    const normalized = program.cutoffs[specialty] / scaleMaximum(program.scale);
+    return normalized >= .85 ? "Muito alta" : normalized >= .75 ? "Alta" : "Moderada";
+  };
+
+  return <div className="page-stack residency-page">
+    <section className="residency-intro panel"><div><span className="section-kicker">MAPA DE PROGRAMAS · REFERÊNCIA 2026</span><h2>Compare a mesma especialidade sem misturar escalas</h2><p>Escolha a área e veja o perfil do serviço, o processo seletivo e a nota do último classificado usada como referência.</p></div><label>Especialidade<select value={specialty} onChange={event => setSpecialty(event.target.value as ResidencySpecialty)}>{RESIDENCY_SPECIALTIES.map(item => <option key={item}>{item}</option>)}</select></label></section>
+
+    <section className="residency-summary three-cards"><MetricCard icon={<Stethoscope />} label="Especialidade" value={specialty === "Otorrinolaringologia" ? "Otorrino" : specialty === "Radiologia" ? "Radio" : specialty} note={`${residencyPrograms.length} referências comparadas`} /><MetricCard icon={<MapPinned />} label="Abrangência" value="2 estados" note="SP, CE e processos nacionais" /><MetricCard icon={<Target />} label="Ano-base" value="2026" note="cortes históricos, não garantia" /></section>
+
+    <section className="residency-grid">{residencyPrograms.map(program => {
+      const cutoff = program.cutoffs[specialty];
+      return <article className="panel residency-card" key={program.id}><header><div><span>{program.process}</span><h2>{program.institution}</h2><small>{program.hospital}</small></div><b>{pressure(program)}</b></header><div className="residency-location"><MapPinned size={14} /> {program.location}</div><p>{program.profile}</p><div className="cutoff-box"><div><small>CORTE OBSERVADO · {program.year}</small><strong>{formatScore(cutoff, program.scale)}</strong><span>escala {program.scale}</span></div><div><small>META DE SEGURANÇA</small><strong>{formatScore(safeTarget(program), program.scale)}</strong><span>margem sugerida, não garantia</span></div></div><a href={program.sourceUrl} target="_blank" rel="noreferrer">Conferir fonte e tabela completa <ChevronRight size={15} /></a></article>;
+    })}</section>
+
+    <section className="panel residency-guide"><ShieldCheck size={23} /><div><h2>Como interpretar esta avaliação</h2><p>A nota compara pressão seletiva, não a qualidade absoluta do programa. Para escolher hospital, confirme no edital atual: cenários de prática, volume de procedimentos, preceptoria, carga de plantão, rodízios externos, bolsas e vagas. No SUS-SP, o hospital depende da escolha e da sua classificação; no ENARE, cada instituição possui corte próprio.</p></div></section>
+  </div>;
 }
 
 function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyCards, mockExamCadence, onFocusAreaChange, onSaveStatus, onAgendaChange, onMarkStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyCards: number; mockExamCadence: 3 | 4; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onMarkStudied: (topic: string) => void }) {

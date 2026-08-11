@@ -257,6 +257,55 @@ const additionalUnifiedExamCards = unifiedPriorityPools.flatMap((topics, poolInd
   })
 );
 
-export const examFocusedCardDeck = [...broadExamFocusedCards, ...additionalUnifiedExamCards];
+const generalPriorityTopics = [
+  ...new Set([
+    ...bankPriorities.flatMap(bank => bank.topics),
+    ...topicBank.map(topic => topic.title),
+  ])
+].slice(0, 60);
+
+const generalExamTemplates = [
+  {
+    skill: "Comparação de casos",
+    front: (title: string) => `A prova apresenta dois pacientes com ${title}. Qual diferença entre os casos muda diagnóstico, gravidade ou conduta?`,
+    back: "Compare idade e contexto, estabilidade, tempo de evolução, sinais de alarme, comorbidades e contraindicações. A resposta correta costuma depender do dado que realmente muda a decisão, não do detalhe mais chamativo."
+  },
+  {
+    skill: "Interpretação",
+    front: (title: string) => `Em ${title}, o examinador fornece um resultado de exame. Como interpretar o achado sem separá-lo da probabilidade clínica?`,
+    back: "Defina a hipótese antes do exame, identifique se o resultado confirma, afasta ou apenas modifica a probabilidade e verifique se ele muda o próximo passo. Evite tratar um número isolado."
+  },
+  {
+    skill: "Alternativa decisiva",
+    front: (title: string) => `Entre alternativas muito parecidas sobre ${title}, qual critério objetivo deve decidir a resposta?`,
+    back: "Procure indicação, contraindicação, estabilidade, gravidade, momento da doença e objetivo da intervenção. Elimine opções verdadeiras em geral, mas inadequadas para o paciente e para o momento descritos."
+  },
+  {
+    skill: "Falha terapêutica",
+    front: (title: string) => `Após a primeira conduta para ${title}, o paciente não melhora. O que deve ser reavaliado antes de simplesmente trocar o tratamento?`,
+    back: "Reavalie diagnóstico e diferenciais, adesão ou execução, dose e tempo adequados, complicações, resistência quando aplicável e necessidade de escalonamento, internação ou abordagem definitiva."
+  },
+  {
+    skill: "Prevenção e segurança",
+    front: (title: string) => `Como uma banca pode cobrar prevenção, rastreamento, seguimento ou segurança do paciente dentro de ${title}?`,
+    back: "Recupere população-alvo, momento da intervenção, benefício esperado, contraindicações, periodicidade quando houver e prevenção de iatrogenias. Diferencie rastreamento de investigação em pessoa sintomática."
+  }
+] as const;
+
+/** 300 cartões gerais inéditos: 60 temas prioritários x 5 novos ângulos. */
+const newGeneralExamCards = generalPriorityTopics.flatMap((title, topicIndex) => {
+  const matchedTopic = topicBank.find(topic => topic.title === title) ?? topicBank[topicIndex % topicBank.length];
+  return generalExamTemplates.map((template, templateIndex) => ({
+    id: `prova-geral-nova-${topicIndex}-${templateIndex}`,
+    topic: matchedTopic.title,
+    area: matchedTopic.area,
+    skill: template.skill,
+    front: template.front(matchedTopic.title),
+    back: template.back,
+    examFocused: true as const,
+  }));
+});
+
+export const examFocusedCardDeck = [...broadExamFocusedCards, ...additionalUnifiedExamCards, ...newGeneralExamCards];
 
 export const medicalCardDeck = [...curatedCards, ...activeRecallCards, ...examFocusedCardDeck];
