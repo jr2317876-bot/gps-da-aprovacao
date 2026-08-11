@@ -150,7 +150,7 @@ type MainCloudState = {
 };
 
 const DEFAULT_PROFILES: Profile[] = [{ id: "joao", name: "João", color: "#0f8f77" }];
-const DEFAULT_BANKS: BankWeights = { sespe: 0, enare: 0, sussp: 0, psumg: 0, uspsp: 0, usprp: 0, unicamp: 0, unifesp: 0, iamspe: 0 };
+const DEFAULT_BANKS: BankWeights = { sespe: 0, enamed: 0, enare: 0, sussp: 0, psumg: 0, uspsp: 0, usprp: 0, unicamp: 0, unifesp: 0, iamspe: 0 };
 const STUDY_AREAS: StudyTopic["area"][] = ["Clínica Médica", "Cirurgia", "Ginecologia e Obstetrícia", "Pediatria", "Preventiva"];
 const RESIDENCY_SPECIALTIES: ResidencySpecialty[] = ["Neurologia", "Clínica Médica", "Cirurgia Geral", "Oftalmologia", "Otorrinolaringologia", "Radiologia"];
 const residencyPrograms: ResidencyProgram[] = [
@@ -190,7 +190,22 @@ const residencyPrograms: ResidencyProgram[] = [
     sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-enare/",
     cutoffs: { "Neurologia": 890, "Clínica Médica": 870, "Cirurgia Geral": 900, "Oftalmologia": 935, "Otorrinolaringologia": 910, "Radiologia": 880 },
   },
+  {
+    id: "ses-pe", institution: "SES-PE", hospital: "Rede de hospitais de Pernambuco", location: "Pernambuco", process: "SES-PE / IAUPE", scale: "0–100", year: 2026,
+    profile: "Processo estadual unificado. A nota é calculada por especialidade; a instituição é definida conforme vagas, classificação e regras de remanejamento.",
+    sourceUrl: "https://med.estrategia.com/portal/residencia-medica/notas-de-corte-para-residencia-medica-pernambuco/",
+    cutoffs: { "Neurologia": 71.334, "Clínica Médica": 61.706, "Cirurgia Geral": 70.583, "Oftalmologia": 74.522, "Otorrinolaringologia": 77.397, "Radiologia": 69.708 },
+  },
 ];
+
+const sesPeFacilities: Record<ResidencySpecialty, string[]> = {
+  "Neurologia": ["Hospital da Restauração Gov. Paulo Guerra", "Hospital Getúlio Vargas", "Hospital Metropolitano Oeste Pelópidas Silveira", "Real Hospital Português"],
+  "Clínica Médica": ["IMIP", "Real Hospital Português", "Hospital Agamenon Magalhães", "Hospital Barão de Lucena", "Hospital da Restauração", "Hospital Getúlio Vargas", "Hospital Otávio de Freitas", "Hospital Mestre Vitalino", "Hospital Miguel Arraes", "Hospital Santa Joana Recife", "FCM/UPE"],
+  "Cirurgia Geral": ["IMIP", "Hospital da Restauração", "Hospital Getúlio Vargas", "Hospital Agamenon Magalhães", "Hospital Barão de Lucena", "Hospital Otávio de Freitas", "Hospital Mestre Vitalino", "Hospital Regional do Agreste", "Santa Casa de Misericórdia do Recife", "FCM/UPE"],
+  "Oftalmologia": ["Fundação Altino Ventura (FAV)", "Hospital de Olhos Santa Luzia", "SEOPE — Serviço Oftalmológico de Pernambuco"],
+  "Otorrinolaringologia": ["Hospital Agamenon Magalhães", "IMIP", "Real Hospital Português"],
+  "Radiologia": ["Hospital Alfa", "Hospital Getúlio Vargas", "Hospital dos Servidores do Estado", "IMIP", "Real Hospital Português", "Hospital Eduardo Campos da Pessoa Idosa"],
+};
 
 const initialTasks: Task[] = [
   { id: 1, area: "CONFIGURAÇÃO", topic: "Escolher bancas e definir a meta", kind: "Primeiro passo", duration: 10, questions: 1, unit: "etapa", reason: "A incidência das bancas define o que vem primeiro", color: "purple" },
@@ -208,9 +223,9 @@ const topicRows = [
 
 const nav = [
   ["Hoje", LayoutDashboard],
+  ["Meu plano", Route],
   ["Mentoria", GraduationCap],
   ["Hospitais", Stethoscope],
-  ["Meu plano", Route],
   ["Flashcards", Layers3],
   ["Questões", ListChecks],
   ["Assuntos", LibraryBig],
@@ -281,7 +296,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
         const created = await supabase.from("study_profiles").insert({ owner_id: ownerId, name: "João", color: "#0f8f77" }).select("id,name,color").single();
         if (created.data) rows = [created.data];
       }
-      const cloudProfiles = rows.slice(0, 4).map(row => ({ id: row.id, name: row.name, color: row.color }));
+      const cloudProfiles = rows.slice(0, 8).map(row => ({ id: row.id, name: row.name, color: row.color }));
       const preferred = localStorage.getItem(`gps-active-profile-${ownerId}`);
       setProfiles(cloudProfiles.length ? cloudProfiles : DEFAULT_PROFILES);
       setActiveProfileId(cloudProfiles.some(profile => profile.id === preferred) ? preferred! : cloudProfiles[0]?.id ?? "joao");
@@ -417,8 +432,8 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   async function addProfile() {
     const name = newProfileName.trim();
     if (!name) return setToast("Digite o nome do novo perfil.");
-    if (profiles.length >= 4) return setToast("Você já atingiu o limite de quatro perfis.");
-    const colors = ["#7257d5", "#e4835f", "#4f88cf"];
+    if (profiles.length >= 8) return setToast("Você já atingiu o limite de oito perfis.");
+    const colors = ["#7257d5", "#e4835f", "#4f88cf", "#bd5b8b", "#d39a32", "#526caa", "#4b9b65"];
     if (!supabase) return;
     const { data, error } = await supabase.from("study_profiles").insert({ owner_id: ownerId, name, color: colors[(profiles.length - 1) % colors.length] }).select("id,name,color").single();
     if (error || !data) return setToast(error?.message ?? "Não foi possível criar o perfil.");
@@ -435,18 +450,21 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
     setDone(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
   }
 
-  function markTopicAsStudied(topicTitle: string) {
+  function setTopicStudyState(topicTitle: string, studied: boolean) {
     const matched = topicBank.find(topic => topic.title.toLocaleLowerCase("pt-BR") === topicTitle.toLocaleLowerCase("pt-BR"));
-    if (!matched) return setToast("Bloco concluído. O assunto não foi encontrado no banco para marcar como estudado.");
-    setStudiedTopics(previous => previous.includes(matched.id) ? previous : [...previous, matched.id]);
-    setToast(`${matched.title} marcado como estudado. Os flashcards foram liberados.`);
+    if (!matched) { setToast(studied ? "Bloco marcado como estudado." : "Bloco voltou para não estudado."); return; }
+    setStudiedTopics(previous => studied ? (previous.includes(matched.id) ? previous : [...previous, matched.id]) : previous.filter(id => id !== matched.id));
+    setToast(studied ? `${matched.title} marcado como estudado. Os flashcards foram liberados.` : `${matched.title} foi desmarcado como estudado.`);
   }
 
-  function updateHomeAgenda(id: number, markStudied: boolean) {
+  function updateHomeAgenda(id: number, action: "complete" | "study") {
     setAgendaPreview(previous => {
-      const next = previous.map(event => event.id === id ? { ...event, completed: true, studied: markStudied || event.studied } : event);
+      const current = previous.find(event => event.id === id);
+      if (!current) return previous;
+      const nextStudied = action === "study" ? !current.studied : Boolean(current.studied);
+      const next = previous.map(event => event.id === id ? action === "study" ? { ...event, studied: nextStudied, completed: nextStudied ? true : event.completed } : { ...event, completed: !event.completed } : event);
       const selected = next.find(event => event.id === id);
-      if (markStudied && selected) markTopicAsStudied(selected.topic);
+      if (action === "study" && selected) setTopicStudyState(selected.topic, nextStudied);
       if (supabase && activeProfileId !== "joao") {
         const client = supabase;
         const state = { events: next, rotation: agendaRotation, suggestionKey: agendaSuggestionKey };
@@ -581,7 +599,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
 
               <section className="panel home-agenda-panel">
                 <div className="panel-title"><div><span className="section-kicker">O QUE FAZER HOJE</span><h2>Sua agenda do dia</h2><p>{todayAgenda.length ? `${todayAgenda.length} blocos definidos pelo foco em ${focusArea || "sua área"} e pelas prioridades das bancas.` : "Configure a grande área da semana para receber as tarefas do dia."}</p></div><button onClick={() => setActive("Meu plano")}>Abrir agenda <ChevronRight size={16} /></button></div>
-                {todayAgenda.length ? <div className="home-agenda-list">{todayAgenda.map(event => <article className={event.completed ? "completed" : ""} key={event.id}><button className="home-task-check" onClick={() => updateHomeAgenda(event.id, false)} aria-label="Concluir bloco">{event.completed ? <Check size={17} /> : <Play size={14} />}</button><div><span>{event.type === "cards" ? "FLASHCARDS" : event.type === "review" ? "REVISÃO ATIVA" : event.type === "questions" ? "QUESTÕES" : event.type === "mock" ? "PROVA COMPLETA" : event.type === "correction" ? "CORREÇÃO" : "TEORIA"}</span><strong>{event.topic}</strong><small>{event.meta}</small></div>{topicBank.some(topic => topic.title === event.topic) && <button className={`mark-studied-button ${event.studied ? "done" : ""}`} onClick={() => updateHomeAgenda(event.id, true)}>{event.studied ? <Check size={15} /> : <BookOpenCheck size={15} />}{event.studied ? "Estudado" : "Marcar estudado"}</button>}</article>)}</div> : <EmptyMini icon={<CalendarClock size={22} />} title="Nenhuma tarefa para hoje" text="Abra Meu plano e escolha a grande área da semana." />}
+                {todayAgenda.length ? <div className="home-agenda-list">{todayAgenda.map(event => <article className={event.completed ? "completed" : ""} key={event.id}><button className="home-task-check" onClick={() => updateHomeAgenda(event.id, "complete")} aria-label={event.completed ? "Reabrir bloco" : "Concluir bloco"}>{event.completed ? <Check size={17} /> : <Play size={14} />}</button><div><span>{event.type === "cards" ? "FLASHCARDS" : event.type === "review" ? "REVISÃO ATIVA" : event.type === "questions" ? "QUESTÕES" : event.type === "mock" ? "PROVA COMPLETA" : event.type === "correction" ? "CORREÇÃO" : "TEORIA"}</span><strong>{event.topic}</strong><small>{event.meta}</small></div><button className={`mark-studied-button ${event.studied ? "done" : ""}`} onClick={() => updateHomeAgenda(event.id, "study")}>{event.studied ? <Check size={15} /> : <BookOpenCheck size={15} />}{event.studied ? "Desmarcar estudado" : "Marcar estudado"}</button></article>)}</div> : <EmptyMini icon={<CalendarClock size={22} />} title="Nenhuma tarefa para hoje" text="Abra Meu plano e escolha a grande área da semana." />}
               </section>
 
               <section className="lower-grid">
@@ -609,7 +627,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
               <div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO</p><h1>{sectionTitle[active]}</h1><p>Todos os dados abaixo conversam com sua rota diária e são recalculados conforme seu progresso.</p></div>{!(["Mentoria", "Hospitais", "Meu plano", "Flashcards", "Questões", "Assuntos", "Prioridades"].includes(active)) && <button className="primary-button" onClick={() => active === "Bancas e metas" ? setPlannerOpen(true) : setToast("Novo registro adicionado à sua fila.")}><Plus size={17} /> {active === "Bancas e metas" ? "Ajustar metas" : "Novo registro"}</button>}</div>
               {active === "Mentoria" && <MentorshipPage agenda={agendaPreview} logs={questionLogs} focusArea={focusArea} target={target} probability={probability} lessonGoal={weeklyLessonGoal} questionGoal={weeklyQuestionGoal} setLessonGoal={setWeeklyLessonGoal} setQuestionGoal={setWeeklyQuestionGoal} checkins={mentorshipCheckins} setCheckins={setMentorshipCheckins} setToast={setToast} onOpenPlan={() => setActive("Meu plano")} />}
               {active === "Hospitais" && <ResidencyProgramsPage />}
-              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyCards={dailyCards} mockExamCadence={mockExamCadence} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onMarkStudied={markTopicAsStudied} />}
+              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyCards={dailyCards} mockExamCadence={mockExamCadence} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onSetStudied={setTopicStudyState} />}
               {active === "Flashcards" && <FlashcardsPage logs={questionLogs} exams={mockExams} banks={banks} dailyCards={dailyCards} setToast={setToast} profileId={activeProfileId} studiedTopics={studiedTopics} onOpenTopics={() => setActive("Assuntos")} onSaveStatus={setSaveStatus} />}
               {active === "Questões" && <QuestionsPage logs={questionLogs} setLogs={setQuestionLogs} setToast={setToast} setStudiedTopics={setStudiedTopics} />}
               {active === "Assuntos" && <TopicsPage studiedTopics={studiedTopics} setStudiedTopics={setStudiedTopics} setToast={setToast} focusArea={focusArea} weeklyTopics={weeklyTopics} setWeeklyTopics={setWeeklyTopics} />}
@@ -626,7 +644,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       {menuOpen && <div className="sidebar-backdrop" onClick={() => setMenuOpen(false)} />}
       {toast && <div className="toast"><Check size={18} />{toast}</div>}
 
-      {profileOpen && <div className="modal-backdrop profile-backdrop" onMouseDown={() => setProfileOpen(false)}><div className="profile-picker" role="dialog" aria-modal="true" aria-label="Escolher perfil" onMouseDown={event => event.stopPropagation()}><div className="profile-picker-head"><div><span className="section-kicker">QUEM ESTÁ ESTUDANDO?</span><h2>Escolha um perfil</h2><p>Cada perfil mantém agenda, métricas e progresso separados.</p></div><button className="icon-button" onClick={() => setProfileOpen(false)}><X size={20} /></button></div><div className="profile-grid">{profiles.map(profile => <button className={profile.id === activeProfileId ? "selected" : ""} key={profile.id} onClick={() => switchProfile(profile.id)}><span className="profile-avatar-large" style={{ background: profile.color }}>{profile.name.charAt(0).toUpperCase()}</span><strong>{profile.name}</strong><small>{profile.id === activeProfileId ? "Perfil atual" : "Entrar"}</small></button>)}{profiles.length < 4 && <div className="new-profile-card"><span className="profile-avatar-large empty"><UserPlus size={25} /></span><input aria-label="Nome do novo perfil" placeholder="Novo perfil" value={newProfileName} onChange={event => setNewProfileName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addProfile(); }} /><button onClick={addProfile}>Adicionar</button></div>}</div><div className="profile-limit"><Users size={15} /> {profiles.length} de 4 perfis utilizados</div></div></div>}
+      {profileOpen && <div className="modal-backdrop profile-backdrop" onMouseDown={() => setProfileOpen(false)}><div className="profile-picker" role="dialog" aria-modal="true" aria-label="Escolher perfil" onMouseDown={event => event.stopPropagation()}><div className="profile-picker-head"><div><span className="section-kicker">QUEM ESTÁ ESTUDANDO?</span><h2>Escolha um perfil</h2><p>Cada perfil mantém agenda, métricas e progresso separados.</p></div><button className="icon-button" onClick={() => setProfileOpen(false)}><X size={20} /></button></div><div className="profile-grid">{profiles.map(profile => <button className={profile.id === activeProfileId ? "selected" : ""} key={profile.id} onClick={() => switchProfile(profile.id)}><span className="profile-avatar-large" style={{ background: profile.color }}>{profile.name.charAt(0).toUpperCase()}</span><strong>{profile.name}</strong><small>{profile.id === activeProfileId ? "Perfil atual" : "Entrar"}</small></button>)}{profiles.length < 8 && <div className="new-profile-card"><span className="profile-avatar-large empty"><UserPlus size={25} /></span><input aria-label="Nome do novo perfil" placeholder="Novo perfil" value={newProfileName} onChange={event => setNewProfileName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addProfile(); }} /><button onClick={addProfile}>Adicionar</button></div>}</div><div className="profile-limit"><Users size={15} /> {profiles.length} de 8 perfis utilizados</div></div></div>}
 
       {plannerOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setPlannerOpen(false)}>
@@ -740,27 +758,29 @@ function ResidencyProgramsPage() {
     const extra = program.scale === "0–10" ? .3 : program.scale === "0–100" ? 3 : 30;
     return Math.min(scaleMaximum(program.scale), program.cutoffs[specialty] + extra);
   };
-  const formatScore = (value: number, scale: ResidencyProgram["scale"]) => scale === "0–10" ? value.toFixed(1).replace(".", ",") : String(Math.round(value));
+  const formatScore = (value: number, scale: ResidencyProgram["scale"]) => scale === "0–10" ? value.toFixed(1).replace(".", ",") : scale === "0–100" && !Number.isInteger(value) ? value.toFixed(3).replace(".", ",") : String(Math.round(value));
   const pressure = (program: ResidencyProgram) => {
     const normalized = program.cutoffs[specialty] / scaleMaximum(program.scale);
     return normalized >= .85 ? "Muito alta" : normalized >= .75 ? "Alta" : "Moderada";
   };
 
   return <div className="page-stack residency-page">
-    <section className="residency-intro panel"><div><span className="section-kicker">MAPA DE PROGRAMAS · REFERÊNCIA 2026</span><h2>Compare a mesma especialidade sem misturar escalas</h2><p>Escolha a área e veja o perfil do serviço, o processo seletivo e a nota do último classificado usada como referência.</p></div><label>Especialidade<select value={specialty} onChange={event => setSpecialty(event.target.value as ResidencySpecialty)}>{RESIDENCY_SPECIALTIES.map(item => <option key={item}>{item}</option>)}</select></label></section>
+    <section className="residency-intro panel"><div><span className="section-kicker">MAPA DE PROGRAMAS · REFERÊNCIA 2026</span><h2>Compare a mesma especialidade sem misturar escalas</h2><p>A lista inteira é atualizada ao trocar a área: hospitais, corte observado e meta de segurança passam a refletir a especialidade selecionada.</p></div><label>Grande área desejada<select value={specialty} onChange={event => setSpecialty(event.target.value as ResidencySpecialty)}>{RESIDENCY_SPECIALTIES.map(item => <option key={item}>{item}</option>)}</select></label></section>
 
-    <section className="residency-summary three-cards"><MetricCard icon={<Stethoscope />} label="Especialidade" value={specialty === "Otorrinolaringologia" ? "Otorrino" : specialty === "Radiologia" ? "Radio" : specialty} note={`${residencyPrograms.length} referências comparadas`} /><MetricCard icon={<MapPinned />} label="Abrangência" value="2 estados" note="SP, CE e processos nacionais" /><MetricCard icon={<Target />} label="Ano-base" value="2026" note="cortes históricos, não garantia" /></section>
+    <section className="residency-summary three-cards"><MetricCard icon={<Stethoscope />} label="Especialidade" value={specialty === "Otorrinolaringologia" ? "Otorrino" : specialty === "Radiologia" ? "Radio" : specialty} note={`${residencyPrograms.length} processos comparados`} /><MetricCard icon={<MapPinned />} label="Rede SES-PE" value={String(sesPeFacilities[specialty].length)} note="serviços do quadro oficial 2026" /><MetricCard icon={<Target />} label="Ano-base" value="2026" note="cortes históricos, não garantia" /></section>
 
     <section className="residency-grid">{residencyPrograms.map(program => {
       const cutoff = program.cutoffs[specialty];
       return <article className="panel residency-card" key={program.id}><header><div><span>{program.process}</span><h2>{program.institution}</h2><small>{program.hospital}</small></div><b>{pressure(program)}</b></header><div className="residency-location"><MapPinned size={14} /> {program.location}</div><p>{program.profile}</p><div className="cutoff-box"><div><small>CORTE OBSERVADO · {program.year}</small><strong>{formatScore(cutoff, program.scale)}</strong><span>escala {program.scale}</span></div><div><small>META DE SEGURANÇA</small><strong>{formatScore(safeTarget(program), program.scale)}</strong><span>margem sugerida, não garantia</span></div></div><a href={program.sourceUrl} target="_blank" rel="noreferrer">Conferir fonte e tabela completa <ChevronRight size={15} /></a></article>;
     })}</section>
 
+    <section className="panel ses-network"><div className="panel-title"><div><span className="section-kicker">HOSPITAIS DO PROCESSO SES-PE</span><h2>{specialty} em Pernambuco</h2><p>Serviços relacionados à área no quadro oficial de vagas de 2026.</p></div><a href="https://www.upenet.com.br/concursos/2026/26_RED_MED/Edital-e-Anexos/ANEXO%20IV%20-%20QUADRO%20DE%20VAGAS%20PARA%20PUBLICACAO.pdf" target="_blank" rel="noreferrer">Abrir quadro oficial <ChevronRight size={15} /></a></div><div className="ses-facility-grid">{sesPeFacilities[specialty].map((facility, index) => <article key={facility}><span>{index + 1}</span><div><strong>{facility}</strong><small>{facility.includes("Altino Ventura") ? "FAV · referência de corte SES-PE: 74,522/100" : `Referência geral SES-PE para ${specialty}: ${formatScore(residencyPrograms.find(program => program.id === "ses-pe")!.cutoffs[specialty], "0–100")}/100`}</small></div></article>)}</div><p className="ses-cutoff-note"><ShieldCheck size={15} /> A SES-PE divulga corte por especialidade. Não foi atribuído um corte institucional próprio quando a fonte oficial não o publicou; por isso FAV, IMIP e Real Hospital Português usam a referência geral da área.</p></section>
+
     <section className="panel residency-guide"><ShieldCheck size={23} /><div><h2>Como interpretar esta avaliação</h2><p>A nota compara pressão seletiva, não a qualidade absoluta do programa. Para escolher hospital, confirme no edital atual: cenários de prática, volume de procedimentos, preceptoria, carga de plantão, rodízios externos, bolsas e vagas. No SUS-SP, o hospital depende da escolha e da sua classificação; no ENARE, cada instituição possui corte próprio.</p></div></section>
   </div>;
 }
 
-function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyCards, mockExamCadence, onFocusAreaChange, onSaveStatus, onAgendaChange, onMarkStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyCards: number; mockExamCadence: 3 | 4; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onMarkStudied: (topic: string) => void }) {
+function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyCards, mockExamCadence, onFocusAreaChange, onSaveStatus, onAgendaChange, onSetStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyCards: number; mockExamCadence: 3 | 4; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onSetStudied: (topic: string, studied: boolean) => void }) {
   const calendarWeeks = 13;
   const calendarLength = calendarWeeks * 7;
   const calendarDays = useMemo(() => {
@@ -931,9 +951,12 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     return type === "rotation" ? "RODÍZIO" : type === "cards" ? "FLASHCARDS" : type === "review" ? "REVISÃO ATIVA" : type === "questions" ? "QUESTÕES" : type === "materials" ? "MATERIAIS" : type === "mock" ? "PROVA COMPLETA" : type === "correction" ? "CORREÇÃO" : "TEORIA";
   }
 
-  function markEventStudied(id: number, topic: string) {
-    setEvents(previous => previous.map(event => event.id === id ? { ...event, completed: true, studied: true } : event));
-    onMarkStudied(topic);
+  function toggleEventStudied(id: number, topic: string) {
+    const current = events.find(event => event.id === id);
+    if (!current) return;
+    const nextStudied = !current.studied;
+    setEvents(previous => previous.map(event => event.id === id ? { ...event, completed: nextStudied ? true : event.completed, studied: nextStudied } : event));
+    onSetStudied(topic, nextStudied);
   }
 
   function applyRotation() {
@@ -967,7 +990,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
             {events.filter(event => event.day === day.absolute).map(event => <article className={`agenda-event ${event.type} ${event.completed ? "completed" : ""}`} draggable key={event.id} onDragStart={() => setDragged(event.id)}>
               <div className="event-top"><GripVertical size={13} /><span>{eventLabel(event.type)}</span><div><button onClick={() => setEditingEvent(event)} aria-label="Editar bloco"><Pencil size={11} /></button><button onClick={() => removeEvent(event.id)} aria-label="Remover bloco"><Trash2 size={11} /></button></div></div>
               <strong>{event.topic}</strong><small>{event.meta}</small>
-              {topicBank.some(topic => topic.title === event.topic) && <button className={`event-study ${event.studied ? "done" : ""}`} onClick={() => markEventStudied(event.id, event.topic)}>{event.studied ? <Check size={13} /> : <BookOpenCheck size={13} />}{event.studied ? "Estudado" : "Marcar estudado"}</button>}<div className="event-move"><button disabled={day.absolute === 0} onClick={() => moveEvent(event.id, day.absolute - 1)} aria-label="Mover para o dia anterior">‹</button><button disabled={day.absolute === calendarLength - 1} onClick={() => moveEvent(event.id, day.absolute + 1)} aria-label="Mover para o próximo dia">›</button></div>
+              <button className={`event-study ${event.studied ? "done" : ""}`} onClick={() => toggleEventStudied(event.id, event.topic)}>{event.studied ? <Check size={13} /> : <BookOpenCheck size={13} />}{event.studied ? "Desmarcar estudado" : "Marcar estudado"}</button><div className="event-move"><button disabled={day.absolute === 0} onClick={() => moveEvent(event.id, day.absolute - 1)} aria-label="Mover para o dia anterior">‹</button><button disabled={day.absolute === calendarLength - 1} onClick={() => moveEvent(event.id, day.absolute + 1)} aria-label="Mover para o próximo dia">›</button></div>
             </article>)}
             <button className="day-add" onClick={() => { setNewBlock(prev => ({ ...prev, day: day.absolute })); setAddOpen(true); }}><Plus size={14} /> adicionar</button>
           </div>
@@ -998,6 +1021,7 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
   const [examDeckEnabled, setExamDeckEnabled] = useState(true);
   const [topicDraft, setTopicDraft] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingCardId, setEditingCardId] = useState<number | null>(null);
   const [cardForm, setCardForm] = useState({ topic: "", area: "Clínica Médica" as StudyTopic["area"], front: "", back: "" });
   const cardsSaveQueue = useRef<Promise<void>>(Promise.resolve());
 
@@ -1070,8 +1094,20 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
 
   function createCard() {
     if (!cardForm.topic.trim() || !cardForm.front.trim() || !cardForm.back.trim()) return setToast("Preencha assunto, pergunta e resposta.");
-    setCustomCards(previous => [{ id: Date.now(), topic: cardForm.topic.trim(), area: cardForm.area, front: cardForm.front.trim(), back: cardForm.back.trim(), createdAt: new Date().toISOString() }, ...previous]);
-    setCardForm({ topic: "", area: "Clínica Médica", front: "", back: "" }); setCreateOpen(false); setToast("Flashcard criado e incluído na sua fila diária.");
+    if (editingCardId !== null) setCustomCards(previous => previous.map(card => card.id === editingCardId ? { ...card, topic: cardForm.topic.trim(), area: cardForm.area, front: cardForm.front.trim(), back: cardForm.back.trim() } : card));
+    else setCustomCards(previous => [{ id: Date.now(), topic: cardForm.topic.trim(), area: cardForm.area, front: cardForm.front.trim(), back: cardForm.back.trim(), createdAt: new Date().toISOString() }, ...previous]);
+    const wasEditing = editingCardId !== null;
+    setCardForm({ topic: "", area: "Clínica Médica", front: "", back: "" }); setEditingCardId(null); setCreateOpen(false); setToast(wasEditing ? "Flashcard atualizado e salvo na sua fila." : "Flashcard criado e incluído na sua fila diária.");
+  }
+
+  function editCustomCard(card: CustomFlashcard) {
+    setCardForm({ topic: card.topic, area: card.area, front: card.front, back: card.back }); setEditingCardId(card.id); setCreateOpen(true);
+  }
+
+  function deleteCustomCard(id: number) {
+    setCustomCards(previous => previous.filter(card => card.id !== id));
+    if (editingCardId === id) { setEditingCardId(null); setCreateOpen(false); }
+    setToast("Flashcard personalizado excluído da fila.");
   }
 
   const topicRecommendations = logs.slice().sort((a,b) => a.accuracy - b.accuracy).slice(0,4).map(log => ({ ...log, cards: log.accuracy < 60 ? 10 : log.accuracy < 70 ? 7 : 4 }));
@@ -1090,6 +1126,8 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
       <button className={examDeckEnabled ? "active" : ""} onClick={() => { setExamDeckEnabled(value => !value); setCurrent(0); setToast(examDeckEnabled ? "Banco de prova pausado. Seus erros e cards pessoais continuam ativos." : "Banco unificado incluído na fila diária."); }}><span>{examDeckEnabled ? "Ativo" : "Pausado"}</span><i /></button>
     </section>
 
+    {customCards.length > 0 && <section className="panel custom-card-manager"><div className="panel-title"><div><h2>Seus flashcards</h2><p>Edite ou exclua os cartões criados dentro da plataforma.</p></div></div><div>{customCards.map(item => <article key={item.id}><div><span>{item.area}</span><strong>{item.topic}</strong><p>{item.front}</p></div><div className="crud-actions"><button onClick={() => editCustomCard(item)}><Pencil size={14} /> Editar</button><button className="delete" onClick={() => deleteCustomCard(item.id)}><Trash2 size={14} /> Excluir</button></div></article>)}</div></section>}
+
     {card ? <section className="flash-layout">
       <div className="flash-session">
         <div className="flash-session-top"><div><span className="topic-chip">{card.area}</span><small>{card.topic}</small></div><span>{Math.min(answered + 1, sessionGoal)} / {sessionGoal}</span></div>
@@ -1100,30 +1138,49 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
       <aside className="cards-sidebar"><div className="panel"><div className="panel-title"><div><h2>Origem da fila</h2><p>O GPS aumenta a repetição quando encontra erros.</p></div></div><div className="queue-sources"><span><b>{examErrors.length}</b> erros de simulados</span><span><b>{customCards.length}</b> cards criados por você</span><span><b>{selectedCardTopics.length}</b> assuntos escolhidos</span><span><b>{examDeckEnabled ? examFocusedCardDeck.length : 0}</b> cards estilo prova</span></div><div className="recommend-list">{topicRecommendations.map(item => <article key={item.id}><div><strong>{item.topic}</strong><span>{item.questions} questões · {item.accuracy}% de acerto</span></div><b>{item.cards}<small> cards</small></b></article>)}</div></div><div className="panel interval-legend"><h2>Repetição adaptativa</h2><p><span className="dot hard" /> Difícil: alta frequência</p><p><span className="dot medium" /> Médio: frequência moderada</p><p><span className="dot easy" /> Fácil: menor frequência</p></div></aside>
     </section> : <section className="fresh-empty hero-empty"><div className="fresh-empty-icon"><Layers3 size={30} /></div><h2>Sua fila está pronta para começar</h2><p>Escolha um assunto acima ou crie seu primeiro flashcard. Não é necessário alterar o cronograma.</p><button className="primary-button" onClick={() => setCreateOpen(true)}><Plus size={16} /> Criar primeiro flashcard</button></section>}
 
-    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">FLASHCARD PERSONALIZADO</span><h2>Criar novo flashcard</h2><p>O card entrará na fila diária mesmo que o assunto não esteja no cronograma.</p></div><button className="icon-button" onClick={() => setCreateOpen(false)}><X size={20} /></button></div><label className="plain-field">Assunto<input value={cardForm.topic} onChange={event => setCardForm({ ...cardForm, topic: event.target.value })} placeholder="Ex.: Insuficiência cardíaca" /></label><label className="plain-field">Grande área<select value={cardForm.area} onChange={event => setCardForm({ ...cardForm, area: event.target.value as StudyTopic["area"] })}>{STUDY_AREAS.map(area => <option key={area}>{area}</option>)}</select></label><label className="plain-field">Pergunta<textarea value={cardForm.front} onChange={event => setCardForm({ ...cardForm, front: event.target.value })} placeholder="O que eu quero lembrar?" /></label><label className="plain-field">Resposta<textarea value={cardForm.back} onChange={event => setCardForm({ ...cardForm, back: event.target.value })} placeholder="Resposta curta e objetiva" /></label><div className="modal-actions"><button className="text-button" onClick={() => setCreateOpen(false)}>Cancelar</button><button className="primary-button" onClick={createCard}><Check size={16} /> Salvar flashcard</button></div></div></div>}
+    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">FLASHCARD PERSONALIZADO</span><h2>{editingCardId !== null ? "Alterar flashcard" : "Criar novo flashcard"}</h2><p>O card entrará na fila diária mesmo que o assunto não esteja no cronograma.</p></div><button className="icon-button" onClick={() => { setCreateOpen(false); setEditingCardId(null); }}><X size={20} /></button></div><label className="plain-field">Assunto<input value={cardForm.topic} onChange={event => setCardForm({ ...cardForm, topic: event.target.value })} placeholder="Ex.: Insuficiência cardíaca" /></label><label className="plain-field">Grande área<select value={cardForm.area} onChange={event => setCardForm({ ...cardForm, area: event.target.value as StudyTopic["area"] })}>{STUDY_AREAS.map(area => <option key={area}>{area}</option>)}</select></label><label className="plain-field">Pergunta<textarea value={cardForm.front} onChange={event => setCardForm({ ...cardForm, front: event.target.value })} placeholder="O que eu quero lembrar?" /></label><label className="plain-field">Resposta<textarea value={cardForm.back} onChange={event => setCardForm({ ...cardForm, back: event.target.value })} placeholder="Resposta curta e objetiva" /></label><div className="modal-actions"><button className="text-button" onClick={() => { setCreateOpen(false); setEditingCardId(null); }}>Cancelar</button><button className="primary-button" onClick={createCard}><Check size={16} /> {editingCardId !== null ? "Salvar alteração" : "Salvar flashcard"}</button></div></div></div>}
   </div>;
 }
 
 function QuestionsPage({ logs, setLogs, setToast, setStudiedTopics }: { logs: QuestionLog[]; setLogs: React.Dispatch<React.SetStateAction<QuestionLog[]>>; setToast: (message: string) => void; setStudiedTopics: React.Dispatch<React.SetStateAction<string[]>> }) {
-  const [form, setForm] = useState({ topic: "", area: "Ginecologia e Obstetrícia", questions: 20, accuracy: 60 });
+  const [form, setForm] = useState({ topic: "", area: "Ginecologia e Obstetrícia" as StudyTopic["area"], questions: 20, accuracy: 60 });
+  const [editingId, setEditingId] = useState<number | null>(null);
   const total = logs.reduce((sum, log) => sum + log.questions, 0);
   const weighted = total ? Math.round(logs.reduce((sum, log) => sum + log.questions * log.accuracy, 0) / total) : 0;
   const weakest = logs.slice().sort((a,b) => a.accuracy - b.accuracy)[0];
+  const availableTopics = topicBank.filter(topic => topic.area === form.area);
 
   function saveLog() {
     if (!form.topic.trim()) return setToast("Informe o assunto das questões.");
-    setLogs(prev => [{ id: Date.now(), topic: form.topic, area: form.area === "Ginecologia e Obstetrícia" ? "GO" : form.area, questions: form.questions, accuracy: form.accuracy, date: new Date().toISOString().slice(0, 10) }, ...prev]);
+    if (form.questions <= 0 || form.accuracy < 0 || form.accuracy > 100) return setToast("Confira a quantidade de questões e o percentual de acerto.");
+    if (editingId !== null) {
+      setLogs(previous => previous.map(log => log.id === editingId ? { ...log, topic: form.topic, area: form.area, questions: form.questions, accuracy: form.accuracy } : log));
+    } else {
+      setLogs(prev => [{ id: Date.now(), topic: form.topic, area: form.area, questions: form.questions, accuracy: form.accuracy, date: new Date().toISOString().slice(0, 10) }, ...prev]);
+    }
     const matched = topicBank.find(topic => topic.title.toLocaleLowerCase("pt-BR") === form.topic.trim().toLocaleLowerCase("pt-BR"));
     if (matched) setStudiedTopics(prev => prev.includes(matched.id) ? prev : [...prev, matched.id]);
-    setForm({ ...form, topic: "" });
-    setToast("Desempenho salvo. Flashcards e agenda diária recalculados.");
+    setForm({ ...form, topic: "", questions: 20, accuracy: 60 }); setEditingId(null);
+    setToast(editingId !== null ? "Registro atualizado. Agenda e revisões foram recalculadas." : "Desempenho salvo. Flashcards e agenda diária recalculados.");
+  }
+
+  function editLog(log: QuestionLog) {
+    const normalizedArea = log.area === "GO" ? "Ginecologia e Obstetrícia" : log.area as StudyTopic["area"];
+    setForm({ topic: log.topic, area: normalizedArea, questions: log.questions, accuracy: log.accuracy }); setEditingId(log.id);
+    setToast("Registro carregado para edição.");
+  }
+
+  function deleteLog(id: number) {
+    setLogs(previous => previous.filter(log => log.id !== id));
+    if (editingId === id) { setEditingId(null); setForm({ topic: "", area: "Ginecologia e Obstetrícia", questions: 20, accuracy: 60 }); }
+    setToast("Registro de questões excluído e métricas recalculadas.");
   }
 
   return <div className="page-stack">
     <div className="three-cards"><MetricCard icon={<ListChecks />} label="Questões registradas" value={String(total)} note="base do plano adaptativo" /><MetricCard icon={<Target />} label="Acerto ponderado" value={`${weighted}%`} note="considera o volume feito" /><MetricCard icon={<BrainCircuit />} label="Maior oportunidade" value={weakest?.accuracy ? `${weakest.accuracy}%` : "—"} note={weakest?.topic ?? "sem dados"} /></div>
     <section className="question-grid">
-      <div className="panel log-form-panel"><div className="panel-title"><div><h2>Registrar desempenho</h2><p>Digite quantas questões fez e seu percentual de acerto.</p></div></div><label className="plain-field">Assunto<input value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} placeholder="Ex.: Diabetes gestacional" /></label><div className="two-fields"><label>Grande área<select value={form.area} onChange={e => setForm({ ...form, area: e.target.value })}><option>Ginecologia e Obstetrícia</option><option>Clínica Médica</option><option>Cirurgia</option><option>Pediatria</option><option>Preventiva</option></select></label><label>Quantidade<input type="number" min="1" value={form.questions} onChange={e => setForm({ ...form, questions: Number(e.target.value) })} /></label></div><label className="accuracy-slider"><span><b>Percentual de acerto</b><strong>{form.accuracy}%</strong></span><input type="range" min="0" max="100" value={form.accuracy} onChange={e => setForm({ ...form, accuracy: Number(e.target.value) })} /><div><span>Precisa reforçar</span><span>Domínio alto</span></div></label><div className="calculation-preview"><BrainCircuit size={20} /><div><strong>Impacto no plano</strong><p>{form.accuracy < 50 ? "Alta prioridade: próxima revisão em 3 dias e progressão encurtada." : form.accuracy < 70 ? "Prioridade moderada: próxima revisão em 4 dias." : "Consolidação: próxima revisão em 5 dias, ampliando depois se o desempenho continuar alto."}</p></div></div><button className="primary-button save-log" onClick={saveLog}><Check size={17} /> Salvar e recalcular</button></div>
-      <div className="panel"><div className="panel-title"><div><h2>Histórico por assunto</h2><p>O registro mais recente é o que redefine a próxima revisão.</p></div></div>{logs.length ? <div className="log-list">{logs.map(log => <article key={log.id}><div className={`log-score ${log.accuracy < 50 ? "low" : log.accuracy < 70 ? "mid" : "high"}`}><strong>{log.accuracy}%</strong><span>acerto</span></div><div><strong>{log.topic}</strong><span>{log.area} · {log.date}</span></div><div className="log-volume"><b>{log.questions}</b><span>questões</span></div><div className="card-suggestion"><Layers3 size={14} /><b>{log.accuracy < 50 ? 10 : log.accuracy < 70 ? 7 : 4}</b><span>cards/dia</span></div></article>)}</div> : <EmptyMini icon={<ListChecks size={22} />} title="Nenhuma questão registrada" text="Este perfil ainda não tem histórico." />}</div>
+      <div className="panel log-form-panel"><div className="panel-title"><div><h2>{editingId !== null ? "Alterar registro" : "Registrar desempenho"}</h2><p>Escolha o assunto completo da lista e informe o resultado.</p></div>{editingId !== null && <button onClick={() => { setEditingId(null); setForm({ topic: "", area: "Ginecologia e Obstetrícia", questions: 20, accuracy: 60 }); }}>Cancelar edição</button>}</div><div className="two-fields"><label>Grande área<select value={form.area} onChange={e => setForm({ ...form, area: e.target.value as StudyTopic["area"], topic: "" })}>{STUDY_AREAS.map(area => <option key={area}>{area}</option>)}</select></label><label>Quantidade<input type="number" min="1" value={form.questions} onChange={e => setForm({ ...form, questions: Number(e.target.value) })} /></label></div><label className="plain-field">Assunto<select value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })}><option value="">Selecione um dos {availableTopics.length} assuntos</option>{availableTopics.map(topic => <option value={topic.title} key={topic.id}>{topic.title}</option>)}</select></label><label className="accuracy-slider"><span><b>Percentual de acerto</b><strong>{form.accuracy}%</strong></span><input type="range" min="0" max="100" value={form.accuracy} onChange={e => setForm({ ...form, accuracy: Number(e.target.value) })} /><div><span>Precisa reforçar</span><span>Domínio alto</span></div></label><div className="calculation-preview"><BrainCircuit size={20} /><div><strong>Impacto no plano</strong><p>{form.accuracy < 50 ? "Alta prioridade: próxima revisão em 3 dias e progressão encurtada." : form.accuracy < 70 ? "Prioridade moderada: próxima revisão em 4 dias." : "Consolidação: próxima revisão em 5 dias, ampliando depois se o desempenho continuar alto."}</p></div></div><button className="primary-button save-log" onClick={saveLog}><Check size={17} /> {editingId !== null ? "Atualizar e recalcular" : "Salvar e recalcular"}</button></div>
+      <div className="panel"><div className="panel-title"><div><h2>Histórico por assunto</h2><p>Use editar ou excluir; toda mudança recalcula as métricas.</p></div></div>{logs.length ? <div className="log-list">{logs.map(log => <article key={log.id}><div className={`log-score ${log.accuracy < 50 ? "low" : log.accuracy < 70 ? "mid" : "high"}`}><strong>{log.accuracy}%</strong><span>acerto</span></div><div><strong>{log.topic}</strong><span>{log.area} · {log.date}</span></div><div className="log-volume"><b>{log.questions}</b><span>questões</span></div><div className="card-suggestion"><Layers3 size={14} /><b>{log.accuracy < 50 ? 10 : log.accuracy < 70 ? 7 : 4}</b><span>cards/dia</span></div><div className="crud-actions"><button onClick={() => editLog(log)} aria-label={`Editar ${log.topic}`}><Pencil size={14} /> Editar</button><button className="delete" onClick={() => deleteLog(log.id)} aria-label={`Excluir ${log.topic}`}><Trash2 size={14} /> Excluir</button></div></article>)}</div> : <EmptyMini icon={<ListChecks size={22} />} title="Nenhuma questão registrada" text="Este perfil ainda não tem histórico." />}</div>
     </section>
   </div>;
 }
@@ -1186,6 +1243,7 @@ function SimuladosPage({ exams, setExams, setToast }: { exams: MockExamRecord[];
   const [form, setForm] = useState({ bank: "ENARE", year: currentYear, date: new Date().toISOString().slice(0, 10), correct: 0, total: 100 });
   const [errorDraft, setErrorDraft] = useState({ topic: "", area: "Clínica Médica" as StudyTopic["area"], note: "", correction: "" });
   const [errors, setErrors] = useState<MockExamError[]>([]);
+  const [editingExamId, setEditingExamId] = useState<number | null>(null);
   const scores = exams.map(exam => Math.round(exam.correct / exam.total * 100));
   const best = scores.length ? Math.max(...scores) : 0;
   const totalErrors = exams.reduce((sum, exam) => sum + exam.errors.length, 0);
@@ -1199,19 +1257,32 @@ function SimuladosPage({ exams, setExams, setToast }: { exams: MockExamRecord[];
 
   function saveExam() {
     if (form.total <= 0 || form.correct < 0 || form.correct > form.total) return setToast("Confira o total de questões e a quantidade de acertos.");
-    const exam: MockExamRecord = { id: Date.now(), ...form, errors };
-    setExams(previous => [exam, ...previous]);
-    setForm({ bank: "ENARE", year: currentYear, date: new Date().toISOString().slice(0, 10), correct: 0, total: 100 }); setErrors([]);
-    setToast("Simulado, resultado e erros salvos na nuvem. A fila de flashcards foi recalculada.");
+    if (editingExamId !== null) setExams(previous => previous.map(exam => exam.id === editingExamId ? { id: editingExamId, ...form, errors } : exam));
+    else setExams(previous => [{ id: Date.now(), ...form, errors }, ...previous]);
+    const wasEditing = editingExamId !== null;
+    setForm({ bank: "ENARE", year: currentYear, date: new Date().toISOString().slice(0, 10), correct: 0, total: 100 }); setErrors([]); setEditingExamId(null);
+    setToast(wasEditing ? "Simulado atualizado. Métricas, erros e flashcards foram recalculados." : "Simulado, resultado e erros salvos na nuvem. A fila de flashcards foi recalculada.");
+  }
+
+  function editExam(exam: MockExamRecord) {
+    setForm({ bank: exam.bank, year: exam.year, date: exam.date, correct: exam.correct, total: exam.total });
+    setErrors(exam.errors.map(error => ({ ...error })));
+    setEditingExamId(exam.id); setToast("Simulado carregado para edição, incluindo o caderno de erros.");
+  }
+
+  function deleteExam(id: number) {
+    setExams(previous => previous.filter(exam => exam.id !== id));
+    if (editingExamId === id) { setEditingExamId(null); setErrors([]); setForm({ bank: "ENARE", year: currentYear, date: new Date().toISOString().slice(0, 10), correct: 0, total: 100 }); }
+    setToast("Simulado excluído. O desempenho e a fila de flashcards foram recalculados.");
   }
 
   return <div className="page-stack">
     <div className="three-cards"><MetricCard icon={<ClipboardCheck />} label="Provas cadastradas" value={String(exams.length)} note={exams.length ? "histórico salvo" : "nenhum simulado"} /><MetricCard icon={<TrendingUp />} label="Melhor resultado" value={scores.length ? `${best}%` : "—"} note="percentual bruto" /><MetricCard icon={<BrainCircuit />} label="Erros registrados" value={String(totalErrors)} note="alimentam os flashcards" /></div>
     <section className="exam-grid">
-      <div className="panel exam-form-panel"><div className="panel-title"><div><h2>Cadastrar simulado completo</h2><p>Registre a nota e detalhe os erros para transformar cada falha em revisão.</p></div></div><div className="two-fields"><label>Banca<select value={form.bank} onChange={event => setForm({ ...form, bank: event.target.value })}>{bankPriorities.map(bank => <option key={bank.key}>{bank.name}</option>)}</select></label><label>Ano da prova<input type="number" min="2000" max="2100" value={form.year} onChange={event => setForm({ ...form, year: Number(event.target.value) })} /></label></div><div className="three-form-fields"><label>Data realizada<input type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} /></label><label>Total de questões<input type="number" min="1" value={form.total} onChange={event => setForm({ ...form, total: Number(event.target.value) })} /></label><label>Acertos<input type="number" min="0" max={form.total} value={form.correct} onChange={event => setForm({ ...form, correct: Number(event.target.value) })} /></label></div><div className="exam-score-preview"><span>RESULTADO</span><strong>{form.total > 0 ? Math.round(form.correct / form.total * 100) : 0}%</strong><small>{form.correct} de {form.total} questões</small></div>
-        <div className="error-builder"><div><h3>Registrar seus erros</h3><p>Você pode adicionar quantos erros quiser antes de salvar o simulado.</p></div><div className="two-fields"><label>Assunto<input list="exam-error-topics" value={errorDraft.topic} onChange={event => setErrorDraft({ ...errorDraft, topic: event.target.value })} placeholder="Ex.: Trauma torácico" /><datalist id="exam-error-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><label>Grande área<select value={errorDraft.area} onChange={event => setErrorDraft({ ...errorDraft, area: event.target.value as StudyTopic["area"] })}>{STUDY_AREAS.map(area => <option key={area}>{area}</option>)}</select></label></div><label>O que você errou?<textarea value={errorDraft.note} onChange={event => setErrorDraft({ ...errorDraft, note: event.target.value })} placeholder="Ex.: Confundi a indicação de drenagem" /></label><label>Qual é a informação correta?<textarea value={errorDraft.correction} onChange={event => setErrorDraft({ ...errorDraft, correction: event.target.value })} placeholder="Escreva a resposta ou conduta correta. Isso virará um flashcard." /></label><button className="outline-button" onClick={addError}><Plus size={16} /> Adicionar erro ao simulado</button>{errors.length > 0 && <div className="draft-errors">{errors.map(error => <article key={error.id}><div><span>{error.area}</span><strong>{error.topic}</strong><small>{error.note}</small></div><button onClick={() => setErrors(previous => previous.filter(item => item.id !== error.id))}><X size={15} /></button></article>)}</div>}</div><button className="primary-button save-exam" onClick={saveExam}><Check size={17} /> Salvar simulado e erros</button>
+      <div className="panel exam-form-panel"><div className="panel-title"><div><h2>{editingExamId !== null ? "Alterar simulado" : "Cadastrar simulado completo"}</h2><p>Registre a nota e detalhe os erros para transformar cada falha em revisão.</p></div>{editingExamId !== null && <button onClick={() => { setEditingExamId(null); setErrors([]); setForm({ bank: "ENARE", year: currentYear, date: new Date().toISOString().slice(0, 10), correct: 0, total: 100 }); }}>Cancelar edição</button>}</div><div className="two-fields"><label>Banca<select value={form.bank} onChange={event => setForm({ ...form, bank: event.target.value })}>{bankPriorities.map(bank => <option key={bank.key}>{bank.name}</option>)}</select></label><label>Ano da prova<input type="number" min="2000" max="2100" value={form.year} onChange={event => setForm({ ...form, year: Number(event.target.value) })} /></label></div><div className="three-form-fields"><label>Data realizada<input type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} /></label><label>Total de questões<input type="number" min="1" value={form.total} onChange={event => setForm({ ...form, total: Number(event.target.value) })} /></label><label>Acertos<input type="number" min="0" max={form.total} value={form.correct} onChange={event => setForm({ ...form, correct: Number(event.target.value) })} /></label></div><div className="exam-score-preview"><span>RESULTADO</span><strong>{form.total > 0 ? Math.round(form.correct / form.total * 100) : 0}%</strong><small>{form.correct} de {form.total} questões</small></div>
+        <div className="error-builder"><div><h3>Registrar seus erros</h3><p>Você pode adicionar, alterar pela edição do simulado ou remover qualquer erro antes de salvar.</p></div><div className="two-fields"><label>Assunto<input list="exam-error-topics" value={errorDraft.topic} onChange={event => setErrorDraft({ ...errorDraft, topic: event.target.value })} placeholder="Ex.: Trauma torácico" /><datalist id="exam-error-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><label>Grande área<select value={errorDraft.area} onChange={event => setErrorDraft({ ...errorDraft, area: event.target.value as StudyTopic["area"] })}>{STUDY_AREAS.map(area => <option key={area}>{area}</option>)}</select></label></div><label>O que você errou?<textarea value={errorDraft.note} onChange={event => setErrorDraft({ ...errorDraft, note: event.target.value })} placeholder="Ex.: Confundi a indicação de drenagem" /></label><label>Qual é a informação correta?<textarea value={errorDraft.correction} onChange={event => setErrorDraft({ ...errorDraft, correction: event.target.value })} placeholder="Escreva a resposta ou conduta correta. Isso virará um flashcard." /></label><button className="outline-button" onClick={addError}><Plus size={16} /> Adicionar erro ao simulado</button>{errors.length > 0 && <div className="draft-errors">{errors.map(error => <article key={error.id}><div><span>{error.area}</span><strong>{error.topic}</strong><small>{error.note}</small></div><button onClick={() => setErrors(previous => previous.filter(item => item.id !== error.id))}><Trash2 size={15} /></button></article>)}</div>}</div><button className="primary-button save-exam" onClick={saveExam}><Check size={17} /> {editingExamId !== null ? "Atualizar simulado e erros" : "Salvar simulado e erros"}</button>
       </div>
-      <div className="panel"><div className="panel-title"><div><h2>Histórico de simulados</h2><p>Resultados e caderno de erros por prova.</p></div></div>{exams.length ? <div className="exam-history">{exams.map(exam => <article key={exam.id}><header><div><span>{exam.bank} · {exam.year}</span><strong>{Math.round(exam.correct / exam.total * 100)}%</strong><small>{exam.correct}/{exam.total} acertos · {exam.date.split("-").reverse().join("/")}</small></div><b>{exam.errors.length} erros registrados</b></header>{exam.errors.length > 0 && <div className="saved-errors">{exam.errors.map(error => <div key={error.id}><span>{error.area}</span><strong>{error.topic}</strong><p>{error.note}</p><small>Correção: {error.correction}</small></div>)}</div>}</article>)}</div> : <EmptyMini icon={<ClipboardCheck size={22} />} title="Nenhum simulado cadastrado" text="Preencha o formulário ao lado para iniciar seu histórico." />}</div>
+      <div className="panel"><div className="panel-title"><div><h2>Histórico de simulados</h2><p>Resultados e caderno de erros por prova, com CRUD completo.</p></div></div>{exams.length ? <div className="exam-history">{exams.map(exam => <article key={exam.id}><header><div><span>{exam.bank} · {exam.year}</span><strong>{Math.round(exam.correct / exam.total * 100)}%</strong><small>{exam.correct}/{exam.total} acertos · {exam.date.split("-").reverse().join("/")}</small></div><b>{exam.errors.length} erros registrados</b><div className="crud-actions"><button onClick={() => editExam(exam)}><Pencil size={14} /> Editar</button><button className="delete" onClick={() => deleteExam(exam.id)}><Trash2 size={14} /> Excluir</button></div></header>{exam.errors.length > 0 && <div className="saved-errors">{exam.errors.map(error => <div key={error.id}><span>{error.area}</span><strong>{error.topic}</strong><p>{error.note}</p><small>Correção: {error.correction}</small></div>)}</div>}</article>)}</div> : <EmptyMini icon={<ClipboardCheck size={22} />} title="Nenhum simulado cadastrado" text="Preencha o formulário ao lado para iniciar seu histórico." />}</div>
     </section>
   </div>;
 }

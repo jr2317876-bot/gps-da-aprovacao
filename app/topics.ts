@@ -68,7 +68,7 @@ export const topicBank: StudyTopic[] = Object.entries(byArea).flatMap(([area, ti
   titles.map((title, index) => ({ id: `${area}-${index}`, area: area as StudyTopic["area"], title }))
 );
 
-export type BankKey = "sespe" | "enare" | "sussp" | "psumg" | "uspsp" | "usprp" | "unicamp" | "unifesp" | "iamspe";
+export type BankKey = "sespe" | "enamed" | "enare" | "sussp" | "psumg" | "uspsp" | "usprp" | "unicamp" | "unifesp" | "iamspe";
 
 export type BankPriority = {
   key: BankKey;
@@ -85,6 +85,11 @@ export const bankPriorities: BankPriority[] = [
     key: "sespe", name: "SES-PE", short: "Pernambuco", style: "Epidemiologia, perioperatório e temas práticos recorrentes.",
     sourceLabel: "levantamentos de provas recentes da SES-PE", sourceUrl: "https://www.eumedicoresidente.com.br/post/assuntos-mais-cobrados-residencia-medica-ses-pe",
     topics: ["Indicadores de Morbimortalidade", "Cuidados Pré-operatórios", "Imunizações", "Estudos Epidemiológicos: Classificação", "Abdome Agudo Inflamatório", "Afecções Benignas das Vias Biliares", "Assistência ao Parto", "Sangramento da Primeira Metade da Gestação", "Ética Médica, Bioética e Documentação", "Diabetes"]
+  },
+  {
+    key: "enamed", name: "ENAMED", short: "Exame Nacional", style: "Competências essenciais das cinco grandes áreas, raciocínio clínico, prevenção e segurança.",
+    sourceLabel: "matriz oficial do ENAMED", sourceUrl: "https://www.gov.br/inep/pt-br/areas-de-atuacao/avaliacao-e-exames-educacionais/enamed",
+    topics: ["Atenção Primária à Saúde", "Ética Médica, Bioética e Documentação", "Síndrome Coronariana e Diagnósticos Diferenciais", "Sepse, Choque Séptico e Outros Tipos de Choque", "Abdome Agudo Inflamatório", "Abordagem Inicial (xABCDE)", "Pré-Natal", "Assistência ao Parto", "Imunizações", "Crescimento e Desenvolvimento na Infância e Adolescência"]
   },
   {
     key: "enare", name: "ENARE", short: "Nacional", style: "APS, clínica frequente, urgências e condutas objetivas.",
@@ -306,6 +311,40 @@ const newGeneralExamCards = generalPriorityTopics.flatMap((title, topicIndex) =>
   }));
 });
 
-export const examFocusedCardDeck = [...broadExamFocusedCards, ...additionalUnifiedExamCards, ...newGeneralExamCards];
+const tenBankExpansionTemplates = [
+  {
+    skill: "Prioridade em cascata",
+    front: (title: string) => `Em uma vinheta complexa sobre ${title}, quais três decisões devem ser tomadas em ordem para evitar atraso de diagnóstico ou tratamento?`,
+    back: "Ordene a resposta em: reconhecer gravidade e estabilizar; confirmar apenas o que muda a conduta; instituir tratamento e destino adequados. A alternativa correta respeita a sequência temporal do caso."
+  },
+  {
+    skill: "Exceção cobrada",
+    front: (title: string) => `Qual exceção, contraindicação ou apresentação atípica de ${title} tem maior chance de transformar uma alternativa aparentemente correta em errada?`,
+    back: "Revise população especial, estabilidade, comorbidades, janela temporal, contraindicações e critérios de gravidade. Identifique a palavra da vinheta que impede aplicar a regra geral."
+  },
+  {
+    skill: "Reavaliação objetiva",
+    front: (title: string) => `Após a conduta inicial em ${title}, qual parâmetro clínico, laboratorial ou de imagem deve ser reavaliado e o que define sucesso ou escalonamento?`,
+    back: "Defina o marcador de resposta, o intervalo coerente, o sinal de falha e a próxima medida. Em prova, não basta iniciar o tratamento: é preciso reconhecer quando manter, trocar, intervir ou encaminhar."
+  }
+] as const;
+
+/** 300 cartões inéditos: 10 bancas x 10 prioridades x 3 novos ângulos. */
+const tenBankExpansionCards = bankPriorities.flatMap((bank, bankIndex) =>
+  bank.topics.slice(0, 10).flatMap((title, topicIndex) => {
+    const matchedTopic = topicBank.find(topic => topic.title === title) ?? topicBank[(bankIndex * 10 + topicIndex) % topicBank.length];
+    return tenBankExpansionTemplates.map((template, templateIndex) => ({
+      id: `prova-10-bancas-${bank.key}-${topicIndex}-${templateIndex}`,
+      topic: matchedTopic.title,
+      area: matchedTopic.area,
+      skill: template.skill,
+      front: `Ênfase de cobrança: ${bank.style} ${template.front(matchedTopic.title)}`,
+      back: template.back,
+      examFocused: true as const,
+    }));
+  })
+);
+
+export const examFocusedCardDeck = [...broadExamFocusedCards, ...additionalUnifiedExamCards, ...newGeneralExamCards, ...tenBankExpansionCards];
 
 export const medicalCardDeck = [...curatedCards, ...activeRecallCards, ...examFocusedCardDeck];
