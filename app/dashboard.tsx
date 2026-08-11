@@ -29,6 +29,7 @@ import {
   Menu,
   MoreHorizontal,
   Play,
+  Pencil,
   Plus,
   RefreshCw,
   Route,
@@ -39,6 +40,7 @@ import {
   Sparkles,
   Stethoscope,
   Target,
+  Trash2,
   TrendingUp,
   Trophy,
   UserPlus,
@@ -46,7 +48,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { bankPriorities, medicalCardDeck, topicBank, type BankKey, type StudyTopic } from "./topics";
+import { bankPriorities, examFocusedCardDeck, medicalCardDeck, topicBank, type BankKey, type StudyTopic } from "./topics";
 import { supabase } from "@/lib/supabase";
 
 type Task = {
@@ -102,7 +104,7 @@ type AgendaEvent = {
   day: number;
   topic: string;
   meta: string;
-  type: "rotation" | "questions" | "review" | "cards" | "theory";
+  type: "rotation" | "questions" | "review" | "cards" | "theory" | "mock" | "correction";
   completed?: boolean;
   studied?: boolean;
 };
@@ -117,7 +119,7 @@ type SaveStatus = "loading" | "saving" | "saved" | "error";
 type MainCloudState = {
   done?: number[]; target?: number; hours?: number; safety?: number; banks?: Partial<BankWeights>;
   questionLogs?: QuestionLog[]; studiedTopics?: string[]; focusArea?: FocusArea; weeklyTopics?: string[];
-  currentTopic?: string; recalculated?: boolean; mockExams?: MockExamRecord[];
+  currentTopic?: string; recalculated?: boolean; mockExams?: MockExamRecord[]; focusPercentage?: number; mockExamCadence?: 3 | 4;
 };
 
 const DEFAULT_PROFILES: Profile[] = [{ id: "joao", name: "João", color: "#0f8f77" }];
@@ -172,6 +174,8 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const [safety, setSafety] = useState(0);
   const [banks, setBanks] = useState<BankWeights>(DEFAULT_BANKS);
   const [focusArea, setFocusArea] = useState<FocusArea>("");
+  const [focusPercentage, setFocusPercentage] = useState(70);
+  const [mockExamCadence, setMockExamCadence] = useState<3 | 4>(4);
   const [weeklyTopics, setWeeklyTopics] = useState<string[]>([]);
   const [plannerTopicDraft, setPlannerTopicDraft] = useState("");
   const [recalculated, setRecalculated] = useState(false);
@@ -188,6 +192,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const [appReady, setAppReady] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
+  const [todayIndex, setTodayIndex] = useState(0);
   const mainSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const agendaHomeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const activeProfile = profiles.find(profile => profile.id === activeProfileId) ?? profiles[0] ?? DEFAULT_PROFILES[0];
@@ -233,12 +238,14 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
           const legacyTopic = typeof parsed.currentTopic === "string" ? parsed.currentTopic : "";
           const legacyArea = topicBank.find(topic => topic.title === legacyTopic)?.area ?? "";
           setFocusArea((parsed.focusArea ?? legacyArea) as FocusArea);
+          setFocusPercentage(parsed.focusPercentage ?? 70);
+          setMockExamCadence(parsed.mockExamCadence ?? 4);
           setWeeklyTopics(parsed.weeklyTopics ?? (legacyTopic ? [legacyTopic] : []));
           setMockExams(parsed.mockExams ?? []);
           setRecalculated(parsed.recalculated ?? false);
         } else {
           setDone([]); setTarget(0); setHours(0); setSafety(0); setBanks(DEFAULT_BANKS);
-          setQuestionLogs([]); setStudiedTopics([]); setFocusArea(""); setWeeklyTopics([]); setMockExams([]); setRecalculated(false);
+          setQuestionLogs([]); setStudiedTopics([]); setFocusArea(""); setFocusPercentage(70); setMockExamCadence(4); setWeeklyTopics([]); setMockExams([]); setRecalculated(false);
         }
         setHydrated(true);
         setSaveStatus(result?.error ? "error" : "saved");
@@ -252,7 +259,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   useEffect(() => {
     if (!appReady || !hydrated || !supabase || activeProfileId === "joao") return;
     const client = supabase;
-    const state = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, weeklyTopics, mockExams, recalculated };
+    const state = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, recalculated };
     localStorage.setItem(`gps-main-state-${ownerId}-${activeProfileId}`, JSON.stringify(state));
     queueMicrotask(() => setSaveStatus("saving"));
     mainSaveQueue.current = mainSaveQueue.current.then(async () => {
@@ -260,7 +267,12 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       if (error) { setSaveStatus("error"); setToast(`Falha ao sincronizar: ${error.message}`); }
       else setSaveStatus("saved");
     });
-  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, weeklyTopics, mockExams, recalculated, hydrated, appReady, activeProfileId, ownerId]);
+  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, recalculated, hydrated, appReady, activeProfileId, ownerId]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setTodayIndex((new Date().getDay() + 6) % 7), 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (appReady) localStorage.setItem(`gps-active-profile-${ownerId}`, activeProfileId);
@@ -294,9 +306,9 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const totalMinutes = initialTasks.reduce((sum, t) => sum + t.duration, 0);
   const progress = Math.round((completedMinutes / totalMinutes) * 100);
   const probability = questionLogs.length ? Math.min(91, 45 + done.length * 3 + (recalculated ? 2 : 0)) : 0;
-  const dailyCards = studiedTopics.length ? Math.min(45, 10 + questionLogs.reduce((sum, log) => sum + (log.accuracy < 60 ? 4 : log.accuracy < 70 ? 2 : 1), 0)) : 0;
+  const dailyCards = studiedTopics.length ? Math.min(45, 10 + questionLogs.reduce((sum, log) => sum + (log.accuracy < 50 ? 4 : log.accuracy < 70 ? 2 : 1), 0)) : 0;
   const totalBankWeight = Object.values(banks).reduce((sum, value) => sum + value, 0);
-  const todayAgenda = agendaPreview.filter(event => event.day === 0);
+  const todayAgenda = agendaPreview.filter(event => event.day === todayIndex);
   const prioritySuggestions = useMemo<PrioritySuggestion[]>(() => {
     const scores = new Map<string, { score: number; sourceBank: string }>();
     bankPriorities.forEach(bank => {
@@ -493,7 +505,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
 
               <section className="panel home-agenda-panel">
                 <div className="panel-title"><div><span className="section-kicker">O QUE FAZER HOJE</span><h2>Sua agenda do dia</h2><p>{todayAgenda.length ? `${todayAgenda.length} blocos definidos pelo foco em ${focusArea || "sua área"} e pelas prioridades das bancas.` : "Configure a grande área da semana para receber as tarefas do dia."}</p></div><button onClick={() => setActive("Meu plano")}>Abrir agenda <ChevronRight size={16} /></button></div>
-                {todayAgenda.length ? <div className="home-agenda-list">{todayAgenda.map(event => <article className={event.completed ? "completed" : ""} key={event.id}><button className="home-task-check" onClick={() => updateHomeAgenda(event.id, false)} aria-label="Concluir bloco">{event.completed ? <Check size={17} /> : <Play size={14} />}</button><div><span>{event.type === "cards" ? "FLASHCARDS" : event.type === "review" ? "REVISÃO" : event.type === "questions" ? "QUESTÕES" : "TEORIA"}</span><strong>{event.topic}</strong><small>{event.meta}</small></div><button className={`mark-studied-button ${event.studied ? "done" : ""}`} onClick={() => updateHomeAgenda(event.id, true)}>{event.studied ? <Check size={15} /> : <BookOpenCheck size={15} />}{event.studied ? "Estudado" : "Marcar estudado"}</button></article>)}</div> : <EmptyMini icon={<CalendarClock size={22} />} title="Nenhuma tarefa para hoje" text="Abra Meu plano e escolha a grande área da semana." />}
+                {todayAgenda.length ? <div className="home-agenda-list">{todayAgenda.map(event => <article className={event.completed ? "completed" : ""} key={event.id}><button className="home-task-check" onClick={() => updateHomeAgenda(event.id, false)} aria-label="Concluir bloco">{event.completed ? <Check size={17} /> : <Play size={14} />}</button><div><span>{event.type === "cards" ? "FLASHCARDS" : event.type === "review" ? "REVISÃO ATIVA" : event.type === "questions" ? "QUESTÕES" : event.type === "mock" ? "PROVA COMPLETA" : event.type === "correction" ? "CORREÇÃO" : "TEORIA"}</span><strong>{event.topic}</strong><small>{event.meta}</small></div>{topicBank.some(topic => topic.title === event.topic) && <button className={`mark-studied-button ${event.studied ? "done" : ""}`} onClick={() => updateHomeAgenda(event.id, true)}>{event.studied ? <Check size={15} /> : <BookOpenCheck size={15} />}{event.studied ? "Estudado" : "Marcar estudado"}</button>}</article>)}</div> : <EmptyMini icon={<CalendarClock size={22} />} title="Nenhuma tarefa para hoje" text="Abra Meu plano e escolha a grande área da semana." />}
               </section>
 
               <section className="lower-grid">
@@ -519,8 +531,8 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
           ) : (
             <section className="secondary-page">
               <div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO</p><h1>{sectionTitle[active]}</h1><p>Todos os dados abaixo conversam com sua rota diária e são recalculados conforme seu progresso.</p></div>{!(["Meu plano", "Flashcards", "Questões", "Assuntos", "Prioridades"].includes(active)) && <button className="primary-button" onClick={() => active === "Bancas e metas" ? setPlannerOpen(true) : setToast("Novo registro adicionado à sua fila.")}><Plus size={17} /> {active === "Bancas e metas" ? "Ajustar metas" : "Novo registro"}</button>}</div>
-              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onMarkStudied={markTopicAsStudied} />}
-              {active === "Flashcards" && <FlashcardsPage logs={questionLogs} exams={mockExams} dailyCards={dailyCards} setToast={setToast} profileId={activeProfileId} studiedTopics={studiedTopics} onOpenTopics={() => setActive("Assuntos")} onSaveStatus={setSaveStatus} />}
+              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyHours={hours} dailyCards={dailyCards} mockExamCadence={mockExamCadence} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onMarkStudied={markTopicAsStudied} />}
+              {active === "Flashcards" && <FlashcardsPage logs={questionLogs} exams={mockExams} banks={banks} dailyCards={dailyCards} setToast={setToast} profileId={activeProfileId} studiedTopics={studiedTopics} onOpenTopics={() => setActive("Assuntos")} onSaveStatus={setSaveStatus} />}
               {active === "Questões" && <QuestionsPage logs={questionLogs} setLogs={setQuestionLogs} setToast={setToast} setStudiedTopics={setStudiedTopics} />}
               {active === "Assuntos" && <TopicsPage studiedTopics={studiedTopics} setStudiedTopics={setStudiedTopics} setToast={setToast} focusArea={focusArea} weeklyTopics={weeklyTopics} setWeeklyTopics={setWeeklyTopics} />}
               {active === "Prioridades" && <PrioritiesPage banks={banks} priorities={prioritySuggestions} onConfigure={() => setPlannerOpen(true)} />}
@@ -547,9 +559,11 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
               {bankPriorities.map(bank => <label key={bank.key}><span><b>{bank.name}</b><small>{bank.short}</small></span><div><input aria-label={`Peso ${bank.name}`} type="number" min="0" max="100" value={banks[bank.key]} onChange={e => setBanks({ ...banks, [bank.key]: Number(e.target.value) })} /><em>%</em></div></label>)}
             </div>
             <label className="plain-field focus-field">Grande área de foco da semana<select value={focusArea} onChange={event => setFocusArea(event.target.value as FocusArea)}><option value="">Escolha a grande área</option>{STUDY_AREAS.map(area => <option value={area} key={area}>{area}</option>)}</select><small>O cronograma escolherá os assuntos dessa área conforme o peso e a incidência das bancas.</small></label>
+            <label className="range-label focus-percentage"><span><b>Quanto da semana dedicar à área escolhida?</b><strong>{focusPercentage}%</strong></span><input type="range" min="50" max="90" step="5" value={focusPercentage} onChange={event => setFocusPercentage(Number(event.target.value))} /><small>Os outros {100 - focusPercentage}% serão preenchidos com temas de maior retorno de outras áreas e das suas bancas.</small></label>
             <div className="weekly-topic-picker"><label className="plain-field">Assunto específico opcional<div><input list="planner-topics" value={plannerTopicDraft} onChange={event => setPlannerTopicDraft(event.target.value)} placeholder="Ex.: Síndromes Hipertensivas da Gestação" onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addWeeklyTopic(); } }} /><button type="button" onClick={() => addWeeklyTopic()}><Plus size={16} /> Incluir</button></div><datalist id="planner-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist><small>Use apenas quando quiser garantir que um assunto específico apareça nesta semana.</small></label>{weeklyTopics.length > 0 && <div className="weekly-topic-chips">{weeklyTopics.map(topic => <span key={topic}>{topic}<button type="button" aria-label={`Remover ${topic}`} onClick={() => setWeeklyTopics(previous => previous.filter(item => item !== topic))}><X size={13} /></button></span>)}</div>}</div>
             <div className="two-fields"><label>Meta de nota<div><input type="number" value={target} onChange={e => setTarget(Number(e.target.value))} /><em>%</em></div></label><label>Margem de segurança<div><input type="number" value={safety} onChange={e => setSafety(Number(e.target.value))} /><em>pts</em></div></label></div>
             <label className="range-label"><span><b>Horas disponíveis por dia</b><strong>{hours}h</strong></span><input type="range" min="0" max="8" step="0.5" value={hours} onChange={e => setHours(Number(e.target.value))} /></label>
+            <label className="plain-field focus-field">Prova completa<select value={mockExamCadence} onChange={event => setMockExamCadence(Number(event.target.value) as 3 | 4)}><option value={3}>A cada 3 semanas</option><option value={4}>A cada 4 semanas</option></select><small>O calendário reservará um bloco para realizar a prova e outro, no dia seguinte, para corrigir e registrar os erros.</small></label>
             <div className="modal-note"><ShieldCheck size={19} /><p><strong>Seu plano é adaptativo.</strong> Se você atrasar, o GPS redistribui o conteúdo restante sem perder de vista a prova.</p></div>
             <div className="modal-actions"><button className="text-button" onClick={() => setPlannerOpen(false)}>Cancelar</button><button className="primary-button" onClick={savePlanner}><RefreshCw size={17} /> Recalcular plano</button></div>
           </div>
@@ -571,39 +585,80 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   );
 }
 
-function PlanPage({ setToast, profileId, focusArea, weeklyTopics, priorities, onFocusAreaChange, onSaveStatus, onAgendaChange, onMarkStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; weeklyTopics: string[]; priorities: PrioritySuggestion[]; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onMarkStudied: (topic: string) => void }) {
-  const days = [["SEG", "10"], ["TER", "11"], ["QUA", "12"], ["QUI", "13"], ["SEX", "14"], ["SÁB", "15"], ["DOM", "16"]];
+function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyHours, dailyCards, mockExamCadence, onFocusAreaChange, onSaveStatus, onAgendaChange, onMarkStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyHours: number; dailyCards: number; mockExamCadence: 3 | 4; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onMarkStudied: (topic: string) => void }) {
+  const calendarWeeks = 13;
+  const calendarLength = calendarWeeks * 7;
+  const calendarDays = useMemo(() => {
+    const now = new Date();
+    const monday = new Date(now); monday.setHours(12, 0, 0, 0); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    return Array.from({ length: calendarLength }, (_, index) => { const date = new Date(monday); date.setDate(monday.getDate() + index); return { absolute: index, label: ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"][date.getDay()], number: String(date.getDate()).padStart(2, "0"), month: date.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""), iso: date.toISOString().slice(0, 10) }; });
+  }, [calendarLength]);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const visibleDays = calendarDays.slice(weekOffset * 7, weekOffset * 7 + 7);
   const [events, setEvents] = useState<AgendaEvent[]>(initialAgenda);
   const [dragged, setDragged] = useState<number | null>(null);
   const [rotationOpen, setRotationOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<AgendaEvent | null>(null);
   const [rotation, setRotation] = useState({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 });
-  const [newBlock, setNewBlock] = useState({ topic: "", day: 0, meta: "45 min", type: "theory" as AgendaEvent["type"] });
+  const [newBlock, setNewBlock] = useState({ topic: "", day: 0, meta: "2h", type: "theory" as AgendaEvent["type"] });
   const [agendaHydrated, setAgendaHydrated] = useState(false);
   const agendaSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const loadedSuggestionKey = useRef("");
   const suggestedAgenda = useMemo<AgendaEvent[]>(() => {
     if (!focusArea) return [];
-    const manual = weeklyTopics.map(title => topicBank.find(topic => topic.title === title)).filter((topic): topic is StudyTopic => Boolean(topic));
-    const ranked = priorities.filter(item => item.area === focusArea && !weeklyTopics.includes(item.topic));
-    const fallback = topicBank.filter(topic => topic.area === focusArea && !weeklyTopics.includes(topic.title));
-    const areaTopics = [...ranked.map(item => item.topic), ...fallback.map(item => item.title)].filter((topic, index, list) => list.indexOf(topic) === index);
-    const pick = (index: number) => areaTopics[index] ?? areaTopics[0] ?? focusArea;
-    const questionVolume = (topic: string, fallbackValue: number) => priorities.find(item => item.topic === topic)?.questions ?? fallbackValue;
-    const generated: AgendaEvent[] = [
-      { id: 81001, day: 0, topic: pick(0), meta: "Teoria guiada · prioridade da banca · 60 min", type: "theory" },
-      { id: 81002, day: 0, topic: pick(0), meta: `${questionVolume(pick(0), 40)} questões · maior retorno na área`, type: "questions" },
-      { id: 81003, day: 1, topic: pick(1), meta: "Teoria dirigida · 50 min", type: "theory" },
-      { id: 81004, day: 2, topic: pick(1), meta: `${questionVolume(pick(1), 35)} questões · prioridade da banca`, type: "questions" },
-      { id: 81005, day: 3, topic: pick(2), meta: "Teoria + mapa de erros · 55 min", type: "theory" },
-      { id: 81006, day: 4, topic: pick(2), meta: `${questionVolume(pick(2), 30)} questões · prioridade da banca`, type: "questions" },
-      { id: 81007, day: 5, topic: pick(0), meta: "20 cards + revisão dos erros", type: "cards" },
-      { id: 81008, day: 6, topic: focusArea, meta: "Revisão semanal dos pontos frágeis · 40 min", type: "review" },
-    ];
-    manual.slice(0, 3).forEach((topic, index) => generated.push({ id: 81100 + index, day: [1, 3, 5][index], topic: topic.title, meta: `Incluído por você · ${questionVolume(topic.title, 25)} questões`, type: "questions" }));
+    const lessonsPerWeek = dailyHours === 0 ? 2 : dailyHours <= 2 ? 1 : dailyHours < 4 ? 2 : 3;
+    const totalLessons = lessonsPerWeek * 4;
+    const focusTarget = Math.max(1, Math.round(totalLessons * focusPercentage / 100));
+    const focusPool = [...priorities.filter(item => item.area === focusArea).map(item => item.topic), ...topicBank.filter(topic => topic.area === focusArea).map(topic => topic.title)].filter((topic, index, list) => list.indexOf(topic) === index);
+    const mixedPool = [...priorities.filter(item => item.area !== focusArea).map(item => item.topic), ...topicBank.filter(topic => topic.area !== focusArea).map(topic => topic.title)].filter((topic, index, list) => list.indexOf(topic) === index);
+    let focusCursor = 0; let mixedCursor = 0;
+    const lessons = Array.from({ length: totalLessons }, (_, index) => {
+      if (weeklyTopics[index]) return weeklyTopics[index];
+      const useFocus = (index * focusTarget) % totalLessons < focusTarget;
+      return useFocus ? focusPool[focusCursor++ % Math.max(1, focusPool.length)] ?? focusArea : mixedPool[mixedCursor++ % Math.max(1, mixedPool.length)] ?? focusPool[focusCursor++ % Math.max(1, focusPool.length)] ?? focusArea;
+    });
+    const generated: AgendaEvent[] = [];
+    let eventId = 81000;
+    for (let week = 0; week < 4; week += 1) {
+      const base = week * 7;
+      const questionDay = base + (dailyHours >= 4 ? 1 : 2);
+      const weekLessons = lessons.slice(week * lessonsPerWeek, week * lessonsPerWeek + lessonsPerWeek);
+      weekLessons.forEach(topic => {
+        const priority = priorities.find(item => item.topic === topic);
+        generated.push({ id: eventId++, day: base, topic, meta: `5 questões balizadoras + aula completa · 2h a 2h30 · ${priority?.sourceBank ?? "sequência pedagógica"}`, type: "theory" });
+        generated.push({ id: eventId++, day: questionDay, topic, meta: "15 questões da aula · até 1h · corrigir imediatamente", type: "questions" });
+        const logs = questionLogs.filter(log => log.topic.toLocaleLowerCase("pt-BR") === topic.toLocaleLowerCase("pt-BR"));
+        const latest = logs[0]; const previous = logs[1]; const accuracy = latest?.accuracy ?? 0;
+        const change = latest && previous ? latest.accuracy - previous.accuracy : 0;
+        const todayIndex = Math.max(0, calendarDays.findIndex(day => day.iso === new Date().toISOString().slice(0, 10)));
+        const recordedIndex = latest?.date && /^\d{4}-\d{2}-\d{2}$/.test(latest.date) ? calendarDays.findIndex(day => day.iso === latest.date) : todayIndex;
+        const performanceDay = latest ? (recordedIndex >= 0 ? recordedIndex : todayIndex) : questionDay;
+        const reviewStart = latest ? performanceDay : questionDay;
+        const trend = change <= -10 ? ` · queda de ${Math.abs(change)} pontos` : change >= 10 ? ` · melhora de ${change} pontos` : "";
+        if (accuracy < 50 && reviewStart + 1 < calendarLength) generated.push({ id: eventId++, day: reviewStart + 1, topic, meta: `Reforço dirigido aos erros · 30 min${latest ? ` · último acerto ${accuracy}%${trend}` : " · desempenho ainda não medido"}`, type: "theory" });
+        const intervals = accuracy < 50 ? [3, 4, 7, 14, 30] : accuracy < 70 ? [4, 7, 14, 30] : [5, 10, 21, 30];
+        const questionVolumes = accuracy < 50 ? [10, 8, 6, 5, 4] : accuracy < 70 ? [7, 6, 5, 4] : [5, 4, 4, 3];
+        let reviewDay = reviewStart;
+        intervals.forEach((interval, reviewIndex) => {
+          reviewDay += interval;
+          if (reviewDay < 0 || reviewDay >= calendarLength) return;
+          const stage = reviewIndex + 1;
+          generated.push({ id: eventId++, day: reviewDay, topic, meta: `Revisão ${stage} · ${questionVolumes[reviewIndex]} questões curtas + flashcards · intervalo ${interval}d · último acerto ${latest ? `${accuracy}%${trend}` : "a medir"}`, type: "review" });
+        });
+      });
+    }
+    const cardGoal = Math.max(10, dailyCards);
+    for (let day = 0; day < calendarLength; day += 1) generated.push({ id: 85000 + day, day, topic: "Fila diária adaptativa", meta: `${cardGoal} flashcards · erros + assuntos escolhidos`, type: "cards" });
+    let mockIndex = 0;
+    for (let mockDay = mockExamCadence * 7 - 2; mockDay < calendarLength; mockDay += mockExamCadence * 7) {
+      generated.push({ id: 88000 + mockIndex * 2, day: mockDay, topic: "Prova completa", meta: "Simulado integral · 4h · condições reais de prova", type: "mock" });
+      if (mockDay + 1 < calendarLength) generated.push({ id: 88001 + mockIndex * 2, day: mockDay + 1, topic: "Correção da prova completa", meta: "2h · classificar erros, registrar o novo acerto e recalcular revisões", type: "correction" });
+      mockIndex += 1;
+    }
     return generated;
-  }, [focusArea, weeklyTopics, priorities]);
-  const suggestionKey = useMemo(() => JSON.stringify({ focusArea, weeklyTopics, suggested: suggestedAgenda.map(event => [event.topic, event.meta]) }), [focusArea, weeklyTopics, suggestedAgenda]);
+  }, [focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyHours, dailyCards, mockExamCadence, calendarDays, calendarLength]);
+  const suggestionKey = useMemo(() => JSON.stringify({ calendarStart: calendarDays[0]?.iso, focusArea, focusPercentage, weeklyTopics, dailyHours, mockExamCadence, suggested: suggestedAgenda.map(event => [event.day, event.topic, event.meta]) }), [calendarDays, focusArea, focusPercentage, weeklyTopics, dailyHours, mockExamCadence, suggestedAgenda]);
   const suggestionSnapshot = useRef({ agenda: suggestedAgenda, key: suggestionKey });
   useEffect(() => { suggestionSnapshot.current = { agenda: suggestedAgenda, key: suggestionKey }; }, [suggestedAgenda, suggestionKey]);
 
@@ -631,7 +686,7 @@ function PlanPage({ setToast, profileId, focusArea, weeklyTopics, priorities, on
 
   useEffect(() => {
     if (!agendaHydrated || loadedSuggestionKey.current === suggestionKey) return;
-    setEvents(previous => [...previous.filter(event => event.id < 81000 || event.id >= 82000), ...suggestedAgenda]);
+    setEvents(previous => [...previous.filter(event => event.id < 81000 || event.id >= 90000), ...suggestedAgenda]);
     loadedSuggestionKey.current = suggestionKey;
     setToast(focusArea ? `Cronograma recalculado para ${focusArea}, respeitando as prioridades das bancas.` : "Escolha uma grande área para gerar a semana.");
   }, [agendaHydrated, suggestionKey, suggestedAgenda, focusArea, setToast]);
@@ -653,15 +708,28 @@ function PlanPage({ setToast, profileId, focusArea, weeklyTopics, priorities, on
   function moveEvent(id: number, day: number) {
     setEvents(prev => prev.map(event => event.id === id ? { ...event, day } : event));
     setDragged(null);
-    setToast(`Bloco movido para ${days[day][0]}. A rota foi ajustada.`);
+    setToast(`Bloco movido para ${calendarDays[day]?.label ?? "o novo dia"}. A rota foi ajustada.`);
   }
 
   function saveBlock() {
     if (!newBlock.topic.trim()) return setToast("Digite o assunto do novo bloco.");
     setEvents(prev => [...prev, { id: Date.now(), ...newBlock }]);
     setAddOpen(false);
-    setNewBlock({ topic: "", day: 0, meta: "45 min", type: "theory" });
+    setNewBlock({ topic: "", day: weekOffset * 7, meta: "2h", type: "theory" });
     setToast("Bloco incluído na agenda.");
+  }
+
+  function saveEditedEvent() {
+    if (!editingEvent?.topic.trim()) return setToast("Informe o assunto do bloco.");
+    setEvents(previous => previous.map(event => event.id === editingEvent.id ? editingEvent : event)); setEditingEvent(null); setToast("Bloco atualizado e salvo na sua agenda.");
+  }
+
+  function removeEvent(id: number) {
+    setEvents(previous => previous.filter(event => event.id !== id)); setEditingEvent(null); setToast("Bloco removido. Você continua livre para reorganizar a semana.");
+  }
+
+  function eventLabel(type: AgendaEvent["type"]) {
+    return type === "rotation" ? "RODÍZIO" : type === "cards" ? "FLASHCARDS" : type === "review" ? "REVISÃO ATIVA" : type === "questions" ? "QUESTÕES" : type === "mock" ? "PROVA COMPLETA" : type === "correction" ? "CORREÇÃO" : "TEORIA";
   }
 
   function markEventStudied(id: number, topic: string) {
@@ -677,7 +745,8 @@ function PlanPage({ setToast, profileId, focusArea, weeklyTopics, priorities, on
   }
 
   return <div className="page-stack">
-    {focusArea && <section className="focus-banner"><div><span className="section-kicker">GRANDE ÁREA DA SEMANA</span><h2>{focusArea}</h2><p>Dentro desta área, a ordem e o volume dos assuntos seguem o peso das bancas e o seu desempenho.</p>{weeklyTopics.length > 0 && <small>Complementos escolhidos por você: {weeklyTopics.join(" · ")}</small>}</div><span><Sparkles size={16} /> prioridade por banca</span></section>}
+    {focusArea && <section className="focus-banner"><div><span className="section-kicker">EIXO DA SEMANA · NÃO EXCLUSIVO</span><h2>{focusArea} · {focusPercentage}% da rota</h2><p>Os outros {100 - focusPercentage}% intercalam temas de outras áreas conforme as bancas. A sequência segue teoria → questões → revisão ativa.</p>{weeklyTopics.length > 0 && <small>Assuntos fixados por você: {weeklyTopics.join(" · ")}</small>}</div><span><Sparkles size={16} /> plano misto e editável</span></section>}
+    <section className="methodology-banner"><div><RefreshCw size={23} /><span><strong>Revisão espaçada que reage ao último resultado</strong><p>&lt;50%: 3 → 4 → 7 → 14 → 30 dias · 50–69%: 4 → 7 → 14 → 30 dias · ≥70%: 5 → 10 → 21 → 30 dias. Uma queda posterior encurta novamente os intervalos.</p></span></div></section>
     <section className="rotation-banner">
       <div className="rotation-symbol"><Stethoscope size={23} /></div>
       <div className="rotation-copy"><span className="section-kicker">INTERNATO</span><h2>{rotation.area === "Nenhum rodízio cadastrado" ? rotation.area : `Rodízio de ${rotation.area}`}</h2><p>{rotation.area === "Nenhum rodízio cadastrado" ? "Informe sua área e o período para o GPS aproximar teoria e prática." : `Durante o período escolhido, ${rotation.boost}% da carga flexível será direcionada ao rodízio.`}</p></div>
@@ -686,32 +755,34 @@ function PlanPage({ setToast, profileId, focusArea, weeklyTopics, priorities, on
     </section>
 
     <section className="panel agenda-panel">
-      <div className="agenda-toolbar"><div><h2>Semana de 10 a 16 de agosto</h2><p>Arraste os blocos entre os dias ou use as setas. A agenda recalcula o restante.</p></div><div><button className="week-arrow" aria-label="Semana anterior"><ChevronRight size={17} /></button><button className="week-arrow next" aria-label="Próxima semana"><ChevronRight size={17} /></button><button className="primary-button" onClick={() => setAddOpen(true)}><Plus size={16} /> Adicionar bloco</button></div></div>
+      <div className="agenda-toolbar"><div><h2>Semana {weekOffset + 1} de {calendarWeeks} · {visibleDays[0]?.number} {visibleDays[0]?.month} a {visibleDays[6]?.number} {visibleDays[6]?.month}</h2><p>Ordem lógica por aprendizagem. Arraste, edite, exclua ou acrescente qualquer assunto.</p></div><div><button className="week-arrow" disabled={weekOffset === 0} onClick={() => setWeekOffset(value => Math.max(0, value - 1))} aria-label="Semana anterior"><ChevronRight size={17} /></button><button className="week-arrow next" disabled={weekOffset === calendarWeeks - 1} onClick={() => setWeekOffset(value => Math.min(calendarWeeks - 1, value + 1))} aria-label="Próxima semana"><ChevronRight size={17} /></button><button className="primary-button" onClick={() => { setNewBlock(previous => ({ ...previous, day: weekOffset * 7 })); setAddOpen(true); }}><Plus size={16} /> Adicionar bloco</button></div></div>
       <div className="interactive-week">
-        {days.map((day, dayIndex) => <div className={`day-column ${dayIndex === 0 ? "today" : ""}`} key={day[0]} onDragOver={event => event.preventDefault()} onDrop={() => dragged && moveEvent(dragged, dayIndex)}>
-          <header><span>{day[0]}</span><strong>{day[1]}</strong>{dayIndex === 0 && <b>HOJE</b>}</header>
+        {visibleDays.map(day => <div className={`day-column ${day.iso === new Date().toISOString().slice(0, 10) ? "today" : ""}`} key={day.iso} onDragOver={event => event.preventDefault()} onDrop={() => dragged && moveEvent(dragged, day.absolute)}>
+          <header><span>{day.label}</span><strong>{day.number}</strong>{day.iso === new Date().toISOString().slice(0, 10) && <b>HOJE</b>}</header>
           <div className="day-events">
-            {events.filter(event => event.day === dayIndex).map(event => <article className={`agenda-event ${event.type}`} draggable key={event.id} onDragStart={() => setDragged(event.id)}>
-              <div className="event-top"><GripVertical size={13} /><span>{event.type === "rotation" ? "RODÍZIO" : event.type === "cards" ? "FLASHCARDS" : event.type === "review" ? "REVISÃO" : event.type === "questions" ? "QUESTÕES" : "TEORIA"}</span></div>
+            {events.filter(event => event.day === day.absolute).map(event => <article className={`agenda-event ${event.type} ${event.completed ? "completed" : ""}`} draggable key={event.id} onDragStart={() => setDragged(event.id)}>
+              <div className="event-top"><GripVertical size={13} /><span>{eventLabel(event.type)}</span><div><button onClick={() => setEditingEvent(event)} aria-label="Editar bloco"><Pencil size={11} /></button><button onClick={() => removeEvent(event.id)} aria-label="Remover bloco"><Trash2 size={11} /></button></div></div>
               <strong>{event.topic}</strong><small>{event.meta}</small>
-              <button className={`event-study ${event.studied ? "done" : ""}`} onClick={() => markEventStudied(event.id, event.topic)}>{event.studied ? <Check size={13} /> : <BookOpenCheck size={13} />}{event.studied ? "Estudado" : "Marcar estudado"}</button><div className="event-move"><button disabled={dayIndex === 0} onClick={() => moveEvent(event.id, dayIndex - 1)} aria-label="Mover para o dia anterior">‹</button><button disabled={dayIndex === 6} onClick={() => moveEvent(event.id, dayIndex + 1)} aria-label="Mover para o próximo dia">›</button></div>
+              {topicBank.some(topic => topic.title === event.topic) && <button className={`event-study ${event.studied ? "done" : ""}`} onClick={() => markEventStudied(event.id, event.topic)}>{event.studied ? <Check size={13} /> : <BookOpenCheck size={13} />}{event.studied ? "Estudado" : "Marcar estudado"}</button>}<div className="event-move"><button disabled={day.absolute === 0} onClick={() => moveEvent(event.id, day.absolute - 1)} aria-label="Mover para o dia anterior">‹</button><button disabled={day.absolute === calendarLength - 1} onClick={() => moveEvent(event.id, day.absolute + 1)} aria-label="Mover para o próximo dia">›</button></div>
             </article>)}
-            <button className="day-add" onClick={() => { setNewBlock(prev => ({ ...prev, day: dayIndex })); setAddOpen(true); }}><Plus size={14} /> adicionar</button>
+            <button className="day-add" onClick={() => { setNewBlock(prev => ({ ...prev, day: day.absolute })); setAddOpen(true); }}><Plus size={14} /> adicionar</button>
           </div>
-          <footer>{events.filter(event => event.day === dayIndex).length ? `${events.filter(event => event.day === dayIndex).length} blocos` : "Livre"}</footer>
+          <footer>{events.filter(event => event.day === day.absolute).length ? `${events.filter(event => event.day === day.absolute).length} blocos` : "Livre"}</footer>
         </div>)}
       </div>
     </section>
 
-    <div className="three-cards"><MetricCard icon={<Gauge />} label="Carga planejada" value={events.length ? "4h" : "0h"} note={events.length ? `${events.length} blocos nesta semana` : "agenda vazia"} /><MetricCard icon={<Stethoscope />} label="Grande área" value={focusArea || "—"} note={focusArea ? "ordenada pelas bancas" : "foco ainda não definido"} /><MetricCard icon={<Layers3 />} label="Complementos" value={String(weeklyTopics.length)} note={weeklyTopics.length ? "assuntos incluídos por você" : "nenhum assunto obrigatório"} /></div>
+    <div className="three-cards"><MetricCard icon={<Gauge />} label="Aulas da semana" value={String(events.filter(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7).length)} note="2h por aula" /><MetricCard icon={<Stethoscope />} label="Mistura planejada" value={`${focusPercentage}/${100 - focusPercentage}`} note="área-foco / outras áreas" /><MetricCard icon={<Layers3 />} label="Flashcards" value="todos os dias" note={`${Math.max(10, dailyCards)} cards adaptativos`} /></div>
 
     {rotationOpen && <div className="modal-backdrop" onMouseDown={() => setRotationOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Editar rodízio" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">SINCRONIZAR INTERNATO</span><h2>Qual é seu rodízio atual?</h2><p>Ao aplicar, a grande área correspondente vira o foco da semana e os assuntos são ordenados pelas bancas.</p></div><button className="icon-button" onClick={() => setRotationOpen(false)}><X size={20} /></button></div><div className="rotation-form"><label>Área<select value={rotation.area} onChange={e => setRotation({ ...rotation, area: e.target.value })}><option>Nenhum rodízio cadastrado</option><option>Ginecologia e Obstetrícia</option><option>Clínica Médica</option><option>Cirurgia</option><option>Pediatria</option><option>Saúde Coletiva</option><option>Emergência</option></select></label><div className="two-fields"><label>Início<input type="date" value={rotation.start} onChange={e => setRotation({ ...rotation, start: e.target.value })} /></label><label>Fim<input type="date" value={rotation.end} onChange={e => setRotation({ ...rotation, end: e.target.value })} /></label></div><label className="range-label"><span><b>Quanto priorizar o rodízio?</b><strong>{rotation.boost}%</strong></span><input type="range" min="20" max="70" step="5" value={rotation.boost} onChange={e => setRotation({ ...rotation, boost: Number(e.target.value) })} /><small>O restante continua direcionado à incidência das suas bancas.</small></label></div><div className="modal-actions"><button className="text-button" onClick={() => setRotationOpen(false)}>Cancelar</button><button className="primary-button" onClick={applyRotation}><RefreshCw size={16} /> Aplicar à agenda</button></div></div></div>}
 
-    {addOpen && <div className="modal-backdrop" onMouseDown={() => setAddOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Adicionar bloco" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">AGENDA LIVRE</span><h2>Novo bloco de estudo</h2><p>Você poderá movê-lo novamente quando quiser.</p></div><button className="icon-button" onClick={() => setAddOpen(false)}><X size={20} /></button></div><label className="plain-field">Assunto<input value={newBlock.topic} onChange={e => setNewBlock({ ...newBlock, topic: e.target.value })} placeholder="Ex.: Rotura prematura de membranas" /></label><div className="two-fields"><label>Dia<select value={newBlock.day} onChange={e => setNewBlock({ ...newBlock, day: Number(e.target.value) })}>{days.map((day, index) => <option value={index} key={day[0]}>{day[0]}, {day[1]} ago</option>)}</select></label><label>Tipo<select value={newBlock.type} onChange={e => setNewBlock({ ...newBlock, type: e.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option></select></label></div><label className="plain-field">Duração ou volume<input value={newBlock.meta} onChange={e => setNewBlock({ ...newBlock, meta: e.target.value })} placeholder="Ex.: 30 questões · 50 min" /></label><div className="modal-actions"><button className="text-button" onClick={() => setAddOpen(false)}>Cancelar</button><button className="primary-button" onClick={saveBlock}><Plus size={16} /> Adicionar à agenda</button></div></div></div>}
+    {addOpen && <div className="modal-backdrop" onMouseDown={() => setAddOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Adicionar bloco" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">AGENDA LIVRE</span><h2>Novo bloco de estudo</h2><p>Adicione qualquer assunto, mesmo fora da área-foco.</p></div><button className="icon-button" onClick={() => setAddOpen(false)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="agenda-topic-options" value={newBlock.topic} onChange={e => setNewBlock({ ...newBlock, topic: e.target.value })} placeholder="Ex.: Rotura prematura de membranas" /><datalist id="agenda-topic-options">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={newBlock.day} onChange={e => setNewBlock({ ...newBlock, day: Number(e.target.value) })}>{visibleDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={newBlock.type} onChange={e => setNewBlock({ ...newBlock, type: e.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção de prova</option></select></label></div><label className="plain-field">Duração ou volume<input value={newBlock.meta} onChange={e => setNewBlock({ ...newBlock, meta: e.target.value })} placeholder="Ex.: 15 questões · 1h" /></label><div className="modal-actions"><button className="text-button" onClick={() => setAddOpen(false)}>Cancelar</button><button className="primary-button" onClick={saveBlock}><Plus size={16} /> Adicionar à agenda</button></div></div></div>}
+
+    {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">EDITAR CRONOGRAMA</span><h2>Alterar bloco</h2><p>Você não fica restrito às sugestões automáticas.</p></div><button className="icon-button" onClick={() => setEditingEvent(null)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="edit-agenda-topics" value={editingEvent.topic} onChange={event => setEditingEvent({ ...editingEvent, topic: event.target.value })} /><datalist id="edit-agenda-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={editingEvent.day} onChange={event => setEditingEvent({ ...editingEvent, day: Number(event.target.value) })}>{calendarDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={editingEvent.type} onChange={event => setEditingEvent({ ...editingEvent, type: event.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção</option></select></label></div><label className="plain-field">Duração ou volume<input value={editingEvent.meta} onChange={event => setEditingEvent({ ...editingEvent, meta: event.target.value })} /></label><div className="modal-actions split-actions"><button className="danger-button" onClick={() => removeEvent(editingEvent.id)}><Trash2 size={15} /> Excluir</button><button className="primary-button" onClick={saveEditedEvent}><Check size={16} /> Salvar alteração</button></div></div></div>}
   </div>;
 }
 
-function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedTopics, onOpenTopics, onSaveStatus }: { logs: QuestionLog[]; exams: MockExamRecord[]; dailyCards: number; setToast: (message: string) => void; profileId: string; studiedTopics: string[]; onOpenTopics: () => void; onSaveStatus: (status: SaveStatus) => void }) {
+function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, studiedTopics, onOpenTopics, onSaveStatus }: { logs: QuestionLog[]; exams: MockExamRecord[]; banks: BankWeights; dailyCards: number; setToast: (message: string) => void; profileId: string; studiedTopics: string[]; onOpenTopics: () => void; onSaveStatus: (status: SaveStatus) => void }) {
   const [current, setCurrent] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [answered, setAnswered] = useState(0);
@@ -720,6 +791,7 @@ function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedT
   const [cardsHydrated, setCardsHydrated] = useState(false);
   const [customCards, setCustomCards] = useState<CustomFlashcard[]>([]);
   const [selectedCardTopics, setSelectedCardTopics] = useState<string[]>([]);
+  const [examDeckEnabled, setExamDeckEnabled] = useState(true);
   const [topicDraft, setTopicDraft] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [cardForm, setCardForm] = useState({ topic: "", area: "Clínica Médica" as StudyTopic["area"], front: "", back: "" });
@@ -730,10 +802,19 @@ function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedT
   const examErrors = exams.flatMap(exam => exam.errors);
   const errorTopics = examErrors.map(error => error.topic);
   const chosenTitles = [...new Set([...studiedTitles, ...selectedCardTopics, ...weakTopics, ...errorTopics])];
-  const preparedCards = medicalCardDeck.filter(card => chosenTitles.includes(card.topic));
+  const preparedCards = medicalCardDeck.filter(card => chosenTitles.includes(card.topic) && !("examFocused" in card));
   const errorCards = examErrors.map(error => ({ topic: error.topic, area: error.area, front: `Erro de simulado: ${error.note}`, back: error.correction }));
   const generatedCards = topicBank.filter(topic => chosenTitles.includes(topic.title) && !medicalCardDeck.some(card => card.topic === topic.title)).map(topic => ({ topic: topic.title, area: topic.area, front: `Quais são os pontos essenciais para dominar ${topic.title}?`, back: "Revise definição, classificação, apresentação clínica, diagnóstico, conduta, complicações e os principais diferenciais cobrados em prova." }));
-  const activeDeck = [...customCards, ...errorCards, ...preparedCards, ...generatedCards];
+  const selectedBankWeight = Object.values(banks).reduce((sum, weight) => sum + weight, 0);
+  const examQueueCards = useMemo(() => {
+    if (!examDeckEnabled) return [];
+    const topicScore = (topic: string) => bankPriorities.reduce((score, bank) => {
+      if (!bank.topics.includes(topic)) return score;
+      return score + (selectedBankWeight > 0 ? banks[bank.key] : 10);
+    }, 0);
+    return examFocusedCardDeck.slice().sort((a, b) => topicScore(b.topic) - topicScore(a.topic));
+  }, [banks, examDeckEnabled, selectedBankWeight]);
+  const activeDeck = [...customCards, ...errorCards, ...preparedCards, ...generatedCards, ...examQueueCards];
   const sessionGoal = activeDeck.length ? Math.min(45, Math.max(10, dailyCards, customCards.length + examErrors.length * 2 + selectedCardTopics.length * 3)) : 0;
   const card = activeDeck[current % Math.max(1, activeDeck.length)];
   const progress = sessionGoal ? Math.min(100, Math.round((answered / sessionGoal) * 100)) : 0;
@@ -744,13 +825,13 @@ function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedT
       const loadCards = async () => {
         const result = await supabase?.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "flashcards").maybeSingle();
         const localKey = `gps-flashcards-state-${profileId}`;
-        let localData: { current?: number; answered?: number; xp?: number; customCards?: CustomFlashcard[]; selectedCardTopics?: string[] } | null = null;
+        let localData: { current?: number; answered?: number; xp?: number; customCards?: CustomFlashcard[]; selectedCardTopics?: string[]; examDeckEnabled?: boolean } | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
         const parsed = (result?.data?.data as typeof localData) ?? localData;
         if (parsed) {
           setCurrent(parsed.current ?? 0); setAnswered(parsed.answered ?? 0); setXp(parsed.xp ?? 0);
-          setCustomCards(parsed.customCards ?? []); setSelectedCardTopics(parsed.selectedCardTopics ?? []);
-        } else { setCurrent(0); setAnswered(0); setXp(0); setCustomCards([]); setSelectedCardTopics([]); }
+          setCustomCards(parsed.customCards ?? []); setSelectedCardTopics(parsed.selectedCardTopics ?? []); setExamDeckEnabled(parsed.examDeckEnabled ?? true);
+        } else { setCurrent(0); setAnswered(0); setXp(0); setCustomCards([]); setSelectedCardTopics([]); setExamDeckEnabled(true); }
         setCardsHydrated(true);
       };
       loadCards();
@@ -761,7 +842,7 @@ function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedT
   useEffect(() => {
     if (!cardsHydrated || !supabase || profileId === "joao") return;
     const client = supabase;
-    const state = { current, answered, xp, customCards, selectedCardTopics };
+    const state = { current, answered, xp, customCards, selectedCardTopics, examDeckEnabled };
     localStorage.setItem(`gps-flashcards-state-${profileId}`, JSON.stringify(state));
     onSaveStatus("saving");
     cardsSaveQueue.current = cardsSaveQueue.current.then(async () => {
@@ -769,7 +850,7 @@ function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedT
       if (error) { onSaveStatus("error"); setToast(`Falha ao salvar flashcards: ${error.message}`); }
       else onSaveStatus("saved");
     });
-  }, [current, answered, xp, customCards, selectedCardTopics, cardsHydrated, profileId, onSaveStatus, setToast]);
+  }, [current, answered, xp, customCards, selectedCardTopics, examDeckEnabled, cardsHydrated, profileId, onSaveStatus, setToast]);
 
   function rate(label: string, points: number) {
     setAnswered(value => value + 1); setXp(value => value + points); setLastRating(label); setRevealed(false); setCurrent(value => value + 1);
@@ -799,6 +880,12 @@ function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedT
 
     <section className="panel card-choice-panel"><div><h2>Escolha qualquer assunto para a fila</h2><p>Ele não precisa estar na agenda nem ser o foco da semana.</p></div><div><input list="card-topic-options" value={topicDraft} onChange={event => setTopicDraft(event.target.value)} placeholder="Digite ou escolha um assunto" onKeyDown={event => { if (event.key === "Enter") chooseTopic(); }} /><datalist id="card-topic-options">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist><button onClick={chooseTopic}><Plus size={16} /> Adicionar</button></div>{selectedCardTopics.length > 0 && <div className="weekly-topic-chips">{selectedCardTopics.map(topic => <span key={topic}>{topic}<button onClick={() => setSelectedCardTopics(previous => previous.filter(item => item !== topic))}><X size={13} /></button></span>)}</div>}</section>
 
+    <section className={`panel unified-deck-panel ${examDeckEnabled ? "enabled" : ""}`}>
+      <div className="unified-deck-icon"><BrainCircuit size={23} /></div>
+      <div><span className="section-kicker">BANCO UNIFICADO DE PROVA</span><h2>{examFocusedCardDeck.length} cartões em estilo de questão</h2><p>Uma fila única, sem divisão por instituição. As bancas escolhidas só aumentam internamente a prioridade dos assuntos mais relevantes para a sua rota.</p></div>
+      <button className={examDeckEnabled ? "active" : ""} onClick={() => { setExamDeckEnabled(value => !value); setCurrent(0); setToast(examDeckEnabled ? "Banco de prova pausado. Seus erros e cards pessoais continuam ativos." : "Banco unificado incluído na fila diária."); }}><span>{examDeckEnabled ? "Ativo" : "Pausado"}</span><i /></button>
+    </section>
+
     {card ? <section className="flash-layout">
       <div className="flash-session">
         <div className="flash-session-top"><div><span className="topic-chip">{card.area}</span><small>{card.topic}</small></div><span>{Math.min(answered + 1, sessionGoal)} / {sessionGoal}</span></div>
@@ -806,7 +893,7 @@ function FlashcardsPage({ logs, exams, dailyCards, setToast, profileId, studiedT
         {!revealed ? <button className="reveal-button" onClick={() => setRevealed(true)}><Sparkles size={17} /> Mostrar resposta</button> : <div className="rating-area"><p>Como foi lembrar deste conteúdo?</p><div><button className="hard" onClick={() => rate("Difícil", 12)}><Frown size={20} /><span><b>Difícil</b><small>rever amanhã</small></span></button><button className="medium" onClick={() => rate("Médio", 18)}><Meh size={20} /><span><b>Médio</b><small>rever em 4 dias</small></span></button><button className="easy" onClick={() => rate("Fácil", 24)}><Smile size={20} /><span><b>Fácil</b><small>rever em 12 dias</small></span></button></div></div>}
         {lastRating && <div className="micro-reward"><Zap size={14} /> Último card: {lastRating}. O intervalo já foi recalculado.</div>}
       </div>
-      <aside className="cards-sidebar"><div className="panel"><div className="panel-title"><div><h2>Origem da fila</h2><p>O GPS aumenta a repetição quando encontra erros.</p></div></div><div className="queue-sources"><span><b>{examErrors.length}</b> erros de simulados</span><span><b>{customCards.length}</b> cards criados por você</span><span><b>{selectedCardTopics.length}</b> assuntos escolhidos</span></div><div className="recommend-list">{topicRecommendations.map(item => <article key={item.id}><div><strong>{item.topic}</strong><span>{item.questions} questões · {item.accuracy}% de acerto</span></div><b>{item.cards}<small> cards</small></b></article>)}</div></div><div className="panel interval-legend"><h2>Repetição adaptativa</h2><p><span className="dot hard" /> Difícil: alta frequência</p><p><span className="dot medium" /> Médio: frequência moderada</p><p><span className="dot easy" /> Fácil: menor frequência</p></div></aside>
+      <aside className="cards-sidebar"><div className="panel"><div className="panel-title"><div><h2>Origem da fila</h2><p>O GPS aumenta a repetição quando encontra erros.</p></div></div><div className="queue-sources"><span><b>{examErrors.length}</b> erros de simulados</span><span><b>{customCards.length}</b> cards criados por você</span><span><b>{selectedCardTopics.length}</b> assuntos escolhidos</span><span><b>{examDeckEnabled ? examFocusedCardDeck.length : 0}</b> cards estilo prova</span></div><div className="recommend-list">{topicRecommendations.map(item => <article key={item.id}><div><strong>{item.topic}</strong><span>{item.questions} questões · {item.accuracy}% de acerto</span></div><b>{item.cards}<small> cards</small></b></article>)}</div></div><div className="panel interval-legend"><h2>Repetição adaptativa</h2><p><span className="dot hard" /> Difícil: alta frequência</p><p><span className="dot medium" /> Médio: frequência moderada</p><p><span className="dot easy" /> Fácil: menor frequência</p></div></aside>
     </section> : <section className="fresh-empty hero-empty"><div className="fresh-empty-icon"><Layers3 size={30} /></div><h2>Sua fila está pronta para começar</h2><p>Escolha um assunto acima ou crie seu primeiro flashcard. Não é necessário alterar o cronograma.</p><button className="primary-button" onClick={() => setCreateOpen(true)}><Plus size={16} /> Criar primeiro flashcard</button></section>}
 
     {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">FLASHCARD PERSONALIZADO</span><h2>Criar novo flashcard</h2><p>O card entrará na fila diária mesmo que o assunto não esteja no cronograma.</p></div><button className="icon-button" onClick={() => setCreateOpen(false)}><X size={20} /></button></div><label className="plain-field">Assunto<input value={cardForm.topic} onChange={event => setCardForm({ ...cardForm, topic: event.target.value })} placeholder="Ex.: Insuficiência cardíaca" /></label><label className="plain-field">Grande área<select value={cardForm.area} onChange={event => setCardForm({ ...cardForm, area: event.target.value as StudyTopic["area"] })}>{STUDY_AREAS.map(area => <option key={area}>{area}</option>)}</select></label><label className="plain-field">Pergunta<textarea value={cardForm.front} onChange={event => setCardForm({ ...cardForm, front: event.target.value })} placeholder="O que eu quero lembrar?" /></label><label className="plain-field">Resposta<textarea value={cardForm.back} onChange={event => setCardForm({ ...cardForm, back: event.target.value })} placeholder="Resposta curta e objetiva" /></label><div className="modal-actions"><button className="text-button" onClick={() => setCreateOpen(false)}>Cancelar</button><button className="primary-button" onClick={createCard}><Check size={16} /> Salvar flashcard</button></div></div></div>}
@@ -821,7 +908,7 @@ function QuestionsPage({ logs, setLogs, setToast, setStudiedTopics }: { logs: Qu
 
   function saveLog() {
     if (!form.topic.trim()) return setToast("Informe o assunto das questões.");
-    setLogs(prev => [{ id: Date.now(), topic: form.topic, area: form.area === "Ginecologia e Obstetrícia" ? "GO" : form.area, questions: form.questions, accuracy: form.accuracy, date: "Hoje" }, ...prev]);
+    setLogs(prev => [{ id: Date.now(), topic: form.topic, area: form.area === "Ginecologia e Obstetrícia" ? "GO" : form.area, questions: form.questions, accuracy: form.accuracy, date: new Date().toISOString().slice(0, 10) }, ...prev]);
     const matched = topicBank.find(topic => topic.title.toLocaleLowerCase("pt-BR") === form.topic.trim().toLocaleLowerCase("pt-BR"));
     if (matched) setStudiedTopics(prev => prev.includes(matched.id) ? prev : [...prev, matched.id]);
     setForm({ ...form, topic: "" });
@@ -831,8 +918,8 @@ function QuestionsPage({ logs, setLogs, setToast, setStudiedTopics }: { logs: Qu
   return <div className="page-stack">
     <div className="three-cards"><MetricCard icon={<ListChecks />} label="Questões registradas" value={String(total)} note="base do plano adaptativo" /><MetricCard icon={<Target />} label="Acerto ponderado" value={`${weighted}%`} note="considera o volume feito" /><MetricCard icon={<BrainCircuit />} label="Maior oportunidade" value={weakest?.accuracy ? `${weakest.accuracy}%` : "—"} note={weakest?.topic ?? "sem dados"} /></div>
     <section className="question-grid">
-      <div className="panel log-form-panel"><div className="panel-title"><div><h2>Registrar desempenho</h2><p>Digite quantas questões fez e seu percentual de acerto.</p></div></div><label className="plain-field">Assunto<input value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} placeholder="Ex.: Diabetes gestacional" /></label><div className="two-fields"><label>Grande área<select value={form.area} onChange={e => setForm({ ...form, area: e.target.value })}><option>Ginecologia e Obstetrícia</option><option>Clínica Médica</option><option>Cirurgia</option><option>Pediatria</option><option>Preventiva</option></select></label><label>Quantidade<input type="number" min="1" value={form.questions} onChange={e => setForm({ ...form, questions: Number(e.target.value) })} /></label></div><label className="accuracy-slider"><span><b>Percentual de acerto</b><strong>{form.accuracy}%</strong></span><input type="range" min="0" max="100" value={form.accuracy} onChange={e => setForm({ ...form, accuracy: Number(e.target.value) })} /><div><span>Precisa reforçar</span><span>Domínio alto</span></div></label><div className="calculation-preview"><BrainCircuit size={20} /><div><strong>Impacto no plano</strong><p>{form.accuracy < 60 ? "Alta prioridade: o tema receberá mais questões e flashcards frequentes." : form.accuracy < 75 ? "Prioridade moderada: revisões e flashcards em intervalos médios." : "Consolidação: menos repetições, preservando revisões espaçadas."}</p></div></div><button className="primary-button save-log" onClick={saveLog}><Check size={17} /> Salvar e recalcular</button></div>
-      <div className="panel"><div className="panel-title"><div><h2>Histórico por assunto</h2><p>Os registros mais recentes aparecem primeiro.</p></div></div>{logs.length ? <div className="log-list">{logs.map(log => <article key={log.id}><div className={`log-score ${log.accuracy < 60 ? "low" : log.accuracy < 75 ? "mid" : "high"}`}><strong>{log.accuracy}%</strong><span>acerto</span></div><div><strong>{log.topic}</strong><span>{log.area} · {log.date}</span></div><div className="log-volume"><b>{log.questions}</b><span>questões</span></div><div className="card-suggestion"><Layers3 size={14} /><b>{log.accuracy < 60 ? 10 : log.accuracy < 70 ? 7 : 4}</b><span>cards/dia</span></div></article>)}</div> : <EmptyMini icon={<ListChecks size={22} />} title="Nenhuma questão registrada" text="Este perfil ainda não tem histórico." />}</div>
+      <div className="panel log-form-panel"><div className="panel-title"><div><h2>Registrar desempenho</h2><p>Digite quantas questões fez e seu percentual de acerto.</p></div></div><label className="plain-field">Assunto<input value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} placeholder="Ex.: Diabetes gestacional" /></label><div className="two-fields"><label>Grande área<select value={form.area} onChange={e => setForm({ ...form, area: e.target.value })}><option>Ginecologia e Obstetrícia</option><option>Clínica Médica</option><option>Cirurgia</option><option>Pediatria</option><option>Preventiva</option></select></label><label>Quantidade<input type="number" min="1" value={form.questions} onChange={e => setForm({ ...form, questions: Number(e.target.value) })} /></label></div><label className="accuracy-slider"><span><b>Percentual de acerto</b><strong>{form.accuracy}%</strong></span><input type="range" min="0" max="100" value={form.accuracy} onChange={e => setForm({ ...form, accuracy: Number(e.target.value) })} /><div><span>Precisa reforçar</span><span>Domínio alto</span></div></label><div className="calculation-preview"><BrainCircuit size={20} /><div><strong>Impacto no plano</strong><p>{form.accuracy < 50 ? "Alta prioridade: próxima revisão em 3 dias e progressão encurtada." : form.accuracy < 70 ? "Prioridade moderada: próxima revisão em 4 dias." : "Consolidação: próxima revisão em 5 dias, ampliando depois se o desempenho continuar alto."}</p></div></div><button className="primary-button save-log" onClick={saveLog}><Check size={17} /> Salvar e recalcular</button></div>
+      <div className="panel"><div className="panel-title"><div><h2>Histórico por assunto</h2><p>O registro mais recente é o que redefine a próxima revisão.</p></div></div>{logs.length ? <div className="log-list">{logs.map(log => <article key={log.id}><div className={`log-score ${log.accuracy < 50 ? "low" : log.accuracy < 70 ? "mid" : "high"}`}><strong>{log.accuracy}%</strong><span>acerto</span></div><div><strong>{log.topic}</strong><span>{log.area} · {log.date}</span></div><div className="log-volume"><b>{log.questions}</b><span>questões</span></div><div className="card-suggestion"><Layers3 size={14} /><b>{log.accuracy < 50 ? 10 : log.accuracy < 70 ? 7 : 4}</b><span>cards/dia</span></div></article>)}</div> : <EmptyMini icon={<ListChecks size={22} />} title="Nenhuma questão registrada" text="Este perfil ainda não tem histórico." />}</div>
     </section>
   </div>;
 }

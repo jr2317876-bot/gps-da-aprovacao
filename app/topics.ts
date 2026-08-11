@@ -163,7 +163,63 @@ const activeRecallCards = topicBank.flatMap(topic => [
     area: topic.area,
     front: `Monte uma vinheta clínica de ${topic.title}: qual pista separa o diagnóstico principal do diferencial mais perigoso?`,
     back: "Identifique a pista discriminativa, o exame que muda conduta, a primeira medida segura e o erro clássico de prova. Se não conseguir explicar em 60 segundos, marque como Difícil."
+  },
+  {
+    topic: topic.title,
+    area: topic.area,
+    front: `Questão de prova sobre ${topic.title}: quais dados mudariam sua conduta imediata e quais seriam apenas distratores?`,
+    back: "Separe gravidade e instabilidade, critérios diagnósticos, contraindicações e o próximo passo que altera desfecho. Depois identifique os dados que não modificam a decisão clínica."
+  },
+  {
+    topic: topic.title,
+    area: topic.area,
+    front: `Em ${topic.title}, qual é a sequência correta entre suspeita, confirmação, primeira conduta e tratamento definitivo?`,
+    back: "Responda em quatro etapas: reconhecimento clínico, exame confirmatório quando necessário, estabilização ou medida inicial e tratamento definitivo. Compare com seu material e transforme qualquer falha em um card específico."
   }
 ]);
 
-export const medicalCardDeck = [...curatedCards, ...activeRecallCards];
+const examQuestionTemplates = [
+  {
+    skill: "Diagnóstico",
+    front: (title: string) => `Vinheta de prova sobre ${title}: quais pistas clínicas sustentam o diagnóstico e qual achado obrigaria você a mudar a hipótese?`,
+    back: "Responda em três partes: síndrome apresentada, pistas discriminativas e principal diagnóstico alternativo perigoso. Em seguida, diga qual dado clínico ou exame separa as duas hipóteses."
+  },
+  {
+    skill: "Próximo passo",
+    front: (title: string) => `Em uma questão sobre ${title}, como decidir entre estabilizar, investigar ou tratar imediatamente?`,
+    back: "Primeiro procure instabilidade e sinais de gravidade. Depois identifique se existe diagnóstico clínico suficiente, se um exame realmente muda a conduta e qual intervenção não pode ser atrasada."
+  },
+  {
+    skill: "Conduta",
+    front: (title: string) => `A banca confirmou ${title}. Qual é a conduta inicial, o tratamento definitivo e o critério de internação ou encaminhamento?`,
+    back: "Organize a resposta em: suporte inicial, tratamento específico, destino do paciente e monitorização. Diferencie a conduta do caso estável daquela exigida por gravidade, complicação ou contraindicação."
+  },
+  {
+    skill: "Armadilha",
+    front: (title: string) => `Qual erro de prova é mais provável em ${title}: pedir exame demais, atrasar uma conduta ou escolher tratamento contraindicado?`,
+    back: "Revise o ponto de decisão: o que já pode ser concluído pela clínica, qual exame altera manejo, qual medida vem primeiro e quais condições tornam a alternativa aparentemente correta inadequada."
+  },
+  {
+    skill: "Integração",
+    front: (title: string) => `Transforme ${title} em uma questão completa: fator de risco, apresentação, exame-chave, conduta e prevenção ou seguimento.`,
+    back: "Construa uma cadeia causal curta e coerente. Se algum elo não vier à memória em até 60 segundos, reveja esse trecho no material-base e crie um cartão factual específico para a lacuna."
+  }
+] as const;
+
+/**
+ * Banco autoral unificado em estilo de prova. São 5 ângulos de cobrança para
+ * cada um dos 181 assuntos (905 cartões), sem reproduzir questões protegidas.
+ */
+export const examFocusedCardDeck = topicBank.flatMap(topic =>
+  examQuestionTemplates.map((template, templateIndex) => ({
+    id: `prova-${topic.id}-${templateIndex}`,
+    topic: topic.title,
+    area: topic.area,
+    skill: template.skill,
+    front: template.front(topic.title),
+    back: template.back,
+    examFocused: true as const,
+  }))
+);
+
+export const medicalCardDeck = [...curatedCards, ...activeRecallCards, ...examFocusedCardDeck];
