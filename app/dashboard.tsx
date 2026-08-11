@@ -125,7 +125,7 @@ type MentorshipCheckin = {
   feedback: string;
 };
 
-type ResidencySpecialty = "Neurologia" | "Clínica Médica" | "Cirurgia Geral" | "Oftalmologia" | "Otorrinolaringologia" | "Radiologia";
+type ResidencySpecialty = "Neurologia" | "Clínica Médica" | "Cirurgia Geral" | "Pediatria" | "Ginecologia e Obstetrícia" | "Oftalmologia" | "Otorrinolaringologia" | "Radiologia";
 type ResidencyProgram = {
   id: string;
   institution: string;
@@ -151,61 +151,62 @@ type MainCloudState = {
   questionLogs?: QuestionLog[]; studiedTopics?: string[]; focusArea?: FocusArea; weeklyTopics?: string[];
   currentTopic?: string; recalculated?: boolean; mockExams?: MockExamRecord[]; focusPercentage?: number; mockExamCadence?: 3 | 4;
   weeklyLessonGoal?: number; weeklyQuestionGoal?: number; mentorshipCheckins?: MentorshipCheckin[];
+  residencySpecialty?: ResidencySpecialty;
 };
 
 const DEFAULT_PROFILES: Profile[] = [{ id: "joao", name: "João", color: "#0f8f77" }];
 const DEFAULT_BANKS: BankWeights = { sespe: 0, enamed: 0, enare: 0, sussp: 0, psumg: 0, uspsp: 0, usprp: 0, unicamp: 0, unifesp: 0, iamspe: 0 };
 const STUDY_AREAS: StudyTopic["area"][] = ["Clínica Médica", "Cirurgia", "Ginecologia e Obstetrícia", "Pediatria", "Preventiva"];
-const RESIDENCY_SPECIALTIES: ResidencySpecialty[] = ["Neurologia", "Clínica Médica", "Cirurgia Geral", "Oftalmologia", "Otorrinolaringologia", "Radiologia"];
+const RESIDENCY_SPECIALTIES: ResidencySpecialty[] = ["Neurologia", "Clínica Médica", "Cirurgia Geral", "Pediatria", "Ginecologia e Obstetrícia", "Oftalmologia", "Otorrinolaringologia", "Radiologia"];
 const localDateIso = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const residencyPrograms: ResidencyProgram[] = [
   {
     id: "usp-sp", institution: "USP-SP", hospital: "Hospital das Clínicas da FMUSP", location: "São Paulo · SP", process: "Seleção própria", scale: "0–100", year: 2026,
     profile: "Hospital universitário de alta complexidade, forte ambiente acadêmico e ampla rede de institutos.",
     sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
-    cutoffs: { "Neurologia": 82, "Clínica Médica": 83, "Cirurgia Geral": 85, "Oftalmologia": 85, "Otorrinolaringologia": 86, "Radiologia": 80 },
+    cutoffs: { "Neurologia": 82, "Clínica Médica": 83, "Cirurgia Geral": 85, "Pediatria": 75, "Ginecologia e Obstetrícia": 83, "Oftalmologia": 85, "Otorrinolaringologia": 86, "Radiologia": 80 },
   },
   {
     id: "usp-rp", institution: "USP-RP", hospital: "Hospital das Clínicas de Ribeirão Preto", location: "Ribeirão Preto · SP", process: "Seleção própria", scale: "0–10", year: 2026,
     profile: "Hospital universitário terciário com integração entre assistência, ensino e pesquisa.",
     sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
-    cutoffs: { "Neurologia": 7.2, "Clínica Médica": 7, "Cirurgia Geral": 7.2, "Oftalmologia": 7.2, "Otorrinolaringologia": 7.4, "Radiologia": 6.6 },
+    cutoffs: { "Neurologia": 7.2, "Clínica Médica": 7, "Cirurgia Geral": 7.2, "Pediatria": 6.2, "Ginecologia e Obstetrícia": 7.2, "Oftalmologia": 7.2, "Otorrinolaringologia": 7.4, "Radiologia": 6.6 },
   },
   {
     id: "unicamp", institution: "UNICAMP", hospital: "Hospital de Clínicas da UNICAMP", location: "Campinas · SP", process: "Seleção própria", scale: "0–10", year: 2026,
     profile: "Centro universitário terciário com rede de referência regional e formação acadêmico-assistencial.",
     sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
-    cutoffs: { "Neurologia": 7.7, "Clínica Médica": 7.3, "Cirurgia Geral": 7.7, "Oftalmologia": 7.8, "Otorrinolaringologia": 7.5, "Radiologia": 7.5 },
+    cutoffs: { "Neurologia": 7.7, "Clínica Médica": 7.3, "Cirurgia Geral": 7.7, "Pediatria": 6.6, "Ginecologia e Obstetrícia": 7.5, "Oftalmologia": 7.8, "Otorrinolaringologia": 7.5, "Radiologia": 7.5 },
   },
   {
     id: "iamspe", institution: "IAMSPE", hospital: "Hospital do Servidor Público Estadual", location: "São Paulo · SP", process: "Seleção IAMSPE", scale: "0–10", year: 2026,
     profile: "Hospital geral de grande porte ligado à rede assistencial dos servidores públicos estaduais.",
     sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
-    cutoffs: { "Neurologia": 8.5, "Clínica Médica": 8.4, "Cirurgia Geral": 8.6, "Oftalmologia": 8.6, "Otorrinolaringologia": 8.7, "Radiologia": 8.3 },
+    cutoffs: { "Neurologia": 8.5, "Clínica Médica": 8.4, "Cirurgia Geral": 8.6, "Pediatria": 8, "Ginecologia e Obstetrícia": 8.4, "Oftalmologia": 8.6, "Otorrinolaringologia": 8.7, "Radiologia": 8.3 },
   },
   {
     id: "sus-sp", institution: "SUS-SP", hospital: "Rede de instituições participantes", location: "Estado de São Paulo", process: "SUS-SP", scale: "0–100", year: 2026,
     profile: "Processo unificado: o cenário formativo muda conforme o hospital escolhido e a posição na classificação.",
     sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-de-residencia-medica-de-sao-paulo/",
-    cutoffs: { "Neurologia": 76, "Clínica Médica": 69, "Cirurgia Geral": 72, "Oftalmologia": 76, "Otorrinolaringologia": 76, "Radiologia": 73 },
+    cutoffs: { "Neurologia": 76, "Clínica Médica": 69, "Cirurgia Geral": 72, "Pediatria": 62, "Ginecologia e Obstetrícia": 71, "Oftalmologia": 76, "Otorrinolaringologia": 76, "Radiologia": 73 },
   },
   {
     id: "hc-ufpe-enamed", institution: "HC-UFPE · ENAMED/ENARE", hospital: "Hospital das Clínicas Prof. Romero Marques", location: "Recife · PE", process: "ENAMED → ENARE", scale: "0–1000", year: 2026,
     profile: "Referência pernambucana no processo nacional. Para acesso direto, a nota do ENAMED é utilizada no ENARE; os cortes abaixo são a referência institucional de 2026.",
     sourceUrl: "https://med.estrategia.com/portal/residencia-medica/nota-de-corte-enare/",
-    cutoffs: { "Neurologia": 930, "Clínica Médica": 900, "Cirurgia Geral": 890, "Oftalmologia": 900, "Otorrinolaringologia": 940, "Radiologia": 910 },
+    cutoffs: { "Neurologia": 930, "Clínica Médica": 900, "Cirurgia Geral": 890, "Pediatria": 850, "Ginecologia e Obstetrícia": 880, "Oftalmologia": 900, "Otorrinolaringologia": 940, "Radiologia": 910 },
   },
   {
     id: "hgf-enare", institution: "HGF · ENARE", hospital: "Hospital Geral de Fortaleza", location: "Fortaleza · CE", process: "ENARE", scale: "0–1000", year: 2026,
     profile: "Hospital público terciário; referência útil para comparar programas de alta procura dentro do ENARE.",
     sourceUrl: "https://www.grupomedcof.com.br/blog/notas-de-corte-enare/",
-    cutoffs: { "Neurologia": 890, "Clínica Médica": 870, "Cirurgia Geral": 900, "Oftalmologia": 935, "Otorrinolaringologia": 910, "Radiologia": 880 },
+    cutoffs: { "Neurologia": 890, "Clínica Médica": 870, "Cirurgia Geral": 900, "Pediatria": 810, "Ginecologia e Obstetrícia": 880, "Oftalmologia": 935, "Otorrinolaringologia": 910, "Radiologia": 880 },
   },
   {
     id: "ses-pe", institution: "SES-PE", hospital: "Rede de hospitais de Pernambuco", location: "Pernambuco", process: "SES-PE / IAUPE", scale: "0–100", year: 2026,
     profile: "Processo estadual unificado. A nota é calculada por especialidade; a instituição é definida conforme vagas, classificação e regras de remanejamento.",
     sourceUrl: "https://med.estrategia.com/portal/residencia-medica/notas-de-corte-para-residencia-medica-pernambuco/",
-    cutoffs: { "Neurologia": 71.334, "Clínica Médica": 61.706, "Cirurgia Geral": 70.583, "Oftalmologia": 74.522, "Otorrinolaringologia": 77.397, "Radiologia": 69.708 },
+    cutoffs: { "Neurologia": 71.334, "Clínica Médica": 61.706, "Cirurgia Geral": 70.583, "Pediatria": 59.017, "Ginecologia e Obstetrícia": 64.3, "Oftalmologia": 74.522, "Otorrinolaringologia": 77.397, "Radiologia": 69.708 },
   },
 ];
 
@@ -231,6 +232,22 @@ const sesPeFacilities: Record<ResidencySpecialty, SesFacility[]> = {
     { name: "Hospital Barão de Lucena", cutoff: 73.646 }, { name: "Hospital da Restauração", cutoff: 74.022 }, { name: "Hospital dos Servidores do Estado", cutoff: 76.959 },
     { name: "Hospital Getúlio Vargas", cutoff: 71.52 }, { name: "Hospital Mestre Vitalino — Caruaru", cutoff: 72.333 }, { name: "Hospital Otávio de Freitas", cutoff: 71.27 },
     { name: "Hospital Regional do Agreste", cutoff: 70.583 }, { name: "Santa Casa de Misericórdia do Recife", cutoff: 71.708 }, { name: "IMIP", cutoff: 72.208 },
+  ],
+  "Pediatria": [
+    { name: "AFYA — Jaboatão dos Guararapes", cutoff: 60.792 }, { name: "COREME SES-PE", cutoff: 61.642 },
+    { name: "FCM/UPE — Campus Recife", cutoff: 65.581 }, { name: "FITS — Goiana", cutoff: 59.517 },
+    { name: "Faculdade Paraíso — Araripina", cutoff: 59.08 }, { name: "Hospital Barão de Lucena", cutoff: 60.83 },
+    { name: "Hospital Dom Malan — Petrolina", cutoff: 59.142 }, { name: "Hospital Infantil Maria Lucinda", cutoff: 64.268 },
+    { name: "Hospital Regional Emília Câmara — Afogados da Ingazeira", cutoff: 59.017 }, { name: "IMIP", cutoff: 67.708 },
+    { name: "NCV/UFPE — Caruaru", cutoff: 59.955 }, { name: "Real Hospital Português", cutoff: 64.768 },
+  ],
+  "Ginecologia e Obstetrícia": [
+    { name: "AFYA — Jaboatão dos Guararapes", cutoff: 65.813 }, { name: "FCM/UPE — Campus Recife", cutoff: 70.395 },
+    { name: "FITS — Goiana", cutoff: 65.768 }, { name: "Faculdade Paraíso — Araripina", cutoff: 64.895 },
+    { name: "Hospital Agamenon Magalhães", cutoff: 68.207 }, { name: "Hospital Barão de Lucena", cutoff: 67.645 },
+    { name: "Hospital da Mulher do Recife", cutoff: 68.77 }, { name: "Hospital Dom Malan — Petrolina", cutoff: 65.081 },
+    { name: "Hospital Regional Emília Câmara — Afogados da Ingazeira", cutoff: 64.3 }, { name: "IMIP", cutoff: 71.834 },
+    { name: "NCV/UFPE — Caruaru", cutoff: 66.207 },
   ],
   "Oftalmologia": [
     { name: "Fundação Altino Ventura (FAV) — Recife", cutoff: 76.835, label: "FAV" }, { name: "Fundação Altino Ventura — Serra Talhada", cutoff: 74.646, label: "FAV" },
@@ -318,11 +335,16 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const [weeklyLessonGoal, setWeeklyLessonGoal] = useState(4);
   const [weeklyQuestionGoal, setWeeklyQuestionGoal] = useState(60);
   const [mentorshipCheckins, setMentorshipCheckins] = useState<MentorshipCheckin[]>([]);
+  const [residencySpecialty, setResidencySpecialty] = useState<ResidencySpecialty | "">("");
+  const [loadedMainProfileId, setLoadedMainProfileId] = useState<string | null>(null);
+  const [agendaPreviewProfileId, setAgendaPreviewProfileId] = useState<string | null>(null);
   const [agendaReprogramRequest, setAgendaReprogramRequest] = useState(0);
   const mainSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const agendaHomeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const activeProfile = profiles.find(profile => profile.id === activeProfileId) ?? profiles[0] ?? DEFAULT_PROFILES[0];
-  const handleAgendaChange = useCallback((events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => { setAgendaPreview(events); setAgendaRotation(rotation); setAgendaSuggestionKey(suggestionKey); }, []);
+  const handleAgendaChange = useCallback((events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => {
+    setAgendaPreview(events); setAgendaRotation(rotation); setAgendaSuggestionKey(suggestionKey); setAgendaPreviewProfileId(activeProfileId);
+  }, [activeProfileId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -348,12 +370,20 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
 
   useEffect(() => {
     if (!appReady) return;
+    let cancelled = false;
     const timer = setTimeout(() => {
       setHydrated(false);
+      setLoadedMainProfileId(null);
       setSaveStatus("loading");
+      setDone([]); setTarget(0); setHours(0); setSafety(0); setBanks(DEFAULT_BANKS);
+      setQuestionLogs([]); setStudiedTopics([]); setFocusArea(""); setFocusPercentage(70); setMockExamCadence(4);
+      setWeeklyTopics([]); setMockExams([]); setWeeklyLessonGoal(4); setWeeklyQuestionGoal(60);
+      setMentorshipCheckins([]); setResidencySpecialty(""); setRecalculated(false);
       const loadCloudState = async () => {
-        const result = await supabase?.from("profile_states").select("data").eq("profile_id", activeProfileId).eq("scope", "main").maybeSingle();
-        const localKey = `gps-main-state-${ownerId}-${activeProfileId}`;
+        const requestedProfileId = activeProfileId;
+        const result = await supabase?.from("profile_states").select("data").eq("profile_id", requestedProfileId).eq("scope", "main").maybeSingle();
+        if (cancelled) return;
+        const localKey = `gps-main-state-${ownerId}-${requestedProfileId}`;
         let localData: MainCloudState | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null") as MainCloudState | null; } catch { localData = null; }
         const parsed = (result?.data?.data as MainCloudState | undefined) ?? localData;
@@ -371,24 +401,23 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
           setWeeklyLessonGoal(parsed.weeklyLessonGoal ?? 4);
           setWeeklyQuestionGoal(parsed.weeklyQuestionGoal ?? 60);
           setMentorshipCheckins(parsed.mentorshipCheckins ?? []);
+          setResidencySpecialty(RESIDENCY_SPECIALTIES.includes(parsed.residencySpecialty as ResidencySpecialty) ? parsed.residencySpecialty as ResidencySpecialty : "");
           setRecalculated(parsed.recalculated ?? false);
-        } else {
-          setDone([]); setTarget(0); setHours(0); setSafety(0); setBanks(DEFAULT_BANKS);
-          setQuestionLogs([]); setStudiedTopics([]); setFocusArea(""); setFocusPercentage(70); setMockExamCadence(4); setWeeklyTopics([]); setMockExams([]); setWeeklyLessonGoal(4); setWeeklyQuestionGoal(60); setMentorshipCheckins([]); setRecalculated(false);
         }
+        setLoadedMainProfileId(requestedProfileId);
         setHydrated(true);
         setSaveStatus(result?.error ? "error" : "saved");
         if (result?.error) setToast(`Não foi possível carregar a nuvem; usando a cópia deste aparelho. ${result.error.message}`);
       };
       loadCloudState();
     }, 0);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [activeProfileId, appReady, ownerId]);
 
   useEffect(() => {
-    if (!appReady || !hydrated || !supabase || activeProfileId === "joao") return;
+    if (!appReady || !hydrated || loadedMainProfileId !== activeProfileId || !supabase || activeProfileId === "joao") return;
     const client = supabase;
-    const state = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, recalculated };
+    const state = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, residencySpecialty, recalculated };
     localStorage.setItem(`gps-main-state-${ownerId}-${activeProfileId}`, JSON.stringify(state));
     queueMicrotask(() => setSaveStatus("saving"));
     mainSaveQueue.current = mainSaveQueue.current.then(async () => {
@@ -396,7 +425,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       if (error) { setSaveStatus("error"); setToast(`Falha ao sincronizar: ${error.message}`); }
       else setSaveStatus("saved");
     });
-  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, recalculated, hydrated, appReady, activeProfileId, ownerId]);
+  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, residencySpecialty, recalculated, hydrated, loadedMainProfileId, appReady, activeProfileId, ownerId]);
 
   useEffect(() => {
     const timer = setTimeout(() => setTodayIndex((new Date().getDay() + 6) % 7), 0);
@@ -410,19 +439,27 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   useEffect(() => {
     if (!appReady) return;
     let cancelled = false;
-    const loadAgendaPreview = async () => {
-      const result = await supabase?.from("profile_states").select("data").eq("profile_id", activeProfileId).eq("scope", "agenda").maybeSingle();
-      if (cancelled) return;
-      const localKey = `gps-agenda-state-${activeProfileId}`;
-      let localData: { events?: AgendaEvent[]; rotation?: RotationState; suggestionKey?: string } | null = null;
-      try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
-      const parsed = (result?.data?.data as typeof localData) ?? localData;
-      setAgendaPreview(parsed?.events ?? []);
-      setAgendaRotation(parsed?.rotation ?? { area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 });
-      setAgendaSuggestionKey(parsed?.suggestionKey ?? "");
-    };
-    loadAgendaPreview();
-    return () => { cancelled = true; };
+    const timer = setTimeout(() => {
+      setAgendaPreviewProfileId(null);
+      setAgendaPreview([]);
+      setAgendaRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 });
+      setAgendaSuggestionKey("");
+      const loadAgendaPreview = async () => {
+        const requestedProfileId = activeProfileId;
+        const result = await supabase?.from("profile_states").select("data").eq("profile_id", requestedProfileId).eq("scope", "agenda").maybeSingle();
+        if (cancelled) return;
+        const localKey = `gps-agenda-state-${requestedProfileId}`;
+        let localData: { events?: AgendaEvent[]; rotation?: RotationState; suggestionKey?: string } | null = null;
+        try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
+        const parsed = (result?.data?.data as typeof localData) ?? localData;
+        setAgendaPreview(parsed?.events ?? []);
+        setAgendaRotation(parsed?.rotation ?? { area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 });
+        setAgendaSuggestionKey(parsed?.suggestionKey ?? "");
+        setAgendaPreviewProfileId(requestedProfileId);
+      };
+      loadAgendaPreview();
+    }, 0);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [activeProfileId, appReady]);
 
   useEffect(() => {
@@ -437,7 +474,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const probability = questionLogs.length ? Math.min(91, 45 + done.length * 3 + (recalculated ? 2 : 0)) : 0;
   const dailyCards = studiedTopics.length ? Math.min(45, 10 + questionLogs.reduce((sum, log) => sum + (log.accuracy < 50 ? 4 : log.accuracy < 70 ? 2 : 1), 0)) : 0;
   const totalBankWeight = Object.values(banks).reduce((sum, value) => sum + value, 0);
-  const todayAgenda = agendaPreview.filter(event => event.date ? event.date === localDateIso() : event.day === todayIndex);
+  const todayAgenda = agendaPreviewProfileId === activeProfileId ? agendaPreview.filter(event => event.date ? event.date === localDateIso() : event.day === todayIndex) : [];
   const prioritySuggestions = useMemo<PrioritySuggestion[]>(() => {
     const scores = new Map<string, { score: number; sourceBank: string }>();
     bankPriorities.forEach(bank => {
@@ -469,6 +506,16 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
     }).sort((a, b) => b.score - a.score).slice(0, 40).map((item, index) => ({ ...item, rank: index + 1, questions: Math.max(15, Math.min(70, 42 - Math.min(index, 12) * 2 + (weeklyTopics.includes(item.topic) ? 15 : 0))) }));
   }, [banks, focusArea, weeklyTopics, questionLogs, totalBankWeight]);
 
+  function clearProfileUiForLoading() {
+    setHydrated(false); setLoadedMainProfileId(null); setSaveStatus("loading");
+    setDone([]); setTarget(0); setHours(0); setSafety(0); setBanks(DEFAULT_BANKS);
+    setQuestionLogs([]); setStudiedTopics([]); setFocusArea(""); setFocusPercentage(70); setMockExamCadence(4);
+    setWeeklyTopics([]); setPlannerTopicDraft(""); setMockExams([]); setWeeklyLessonGoal(4); setWeeklyQuestionGoal(60);
+    setMentorshipCheckins([]); setResidencySpecialty(""); setRecalculated(false); setAgendaReprogramRequest(0);
+    setAgendaPreviewProfileId(null); setAgendaPreview([]); setAgendaRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 }); setAgendaSuggestionKey("");
+    setPlannerOpen(false); setStudyOpen(false);
+  }
+
   async function addProfile() {
     const name = newProfileName.trim();
     if (!name) return setToast("Digite o nome do novo perfil.");
@@ -478,12 +525,15 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
     const { data, error } = await supabase.from("study_profiles").insert({ owner_id: ownerId, name, color: colors[(profiles.length - 1) % colors.length] }).select("id,name,color").single();
     if (error || !data) return setToast(error?.message ?? "Não foi possível criar o perfil.");
     const profile = { id: data.id, name: data.name, color: data.color };
-    setHydrated(false); setProfiles(prev => [...prev, profile]); setActiveProfileId(profile.id); setNewProfileName(""); setProfileOpen(false);
+    clearProfileUiForLoading();
+    setProfiles(prev => [...prev, profile]); setActiveProfileId(profile.id); setNewProfileName(""); setProfileOpen(false);
     setToast(`Perfil de ${name} criado.`);
   }
 
   function switchProfile(id: string) {
-    setHydrated(false); setActiveProfileId(id); setProfileOpen(false); setActive("Hoje");
+    if (id === activeProfileId) { setProfileOpen(false); return; }
+    clearProfileUiForLoading();
+    setActiveProfileId(id); setProfileOpen(false); setActive("Hoje");
   }
 
   function toggleTask(id: number) {
@@ -498,6 +548,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   }
 
   function updateHomeAgenda(id: number, action: "complete" | "study") {
+    if (agendaPreviewProfileId !== activeProfileId) return setToast("Aguarde o carregamento completo deste perfil.");
     setAgendaPreview(previous => {
       const current = previous.find(event => event.id === id);
       if (!current) return previous;
@@ -663,10 +714,10 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
               </section>
             </>
           ) : (
-            <section className="secondary-page">
+            <section className="secondary-page" key={activeProfileId}>
               <div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO</p><h1>{sectionTitle[active]}</h1><p>Todos os dados abaixo conversam com sua rota diária e são recalculados conforme seu progresso.</p></div>{!(["Mentoria", "Hospitais", "Meu plano", "Flashcards", "Questões", "Assuntos", "Prioridades"].includes(active)) && <button className="primary-button" onClick={() => active === "Bancas e metas" ? setPlannerOpen(true) : setToast("Novo registro adicionado à sua fila.")}><Plus size={17} /> {active === "Bancas e metas" ? "Ajustar metas" : "Novo registro"}</button>}</div>
               {active === "Mentoria" && <MentorshipPage agenda={agendaPreview} logs={questionLogs} focusArea={focusArea} target={target} probability={probability} lessonGoal={weeklyLessonGoal} questionGoal={weeklyQuestionGoal} setLessonGoal={setWeeklyLessonGoal} setQuestionGoal={setWeeklyQuestionGoal} checkins={mentorshipCheckins} setCheckins={setMentorshipCheckins} setToast={setToast} onOpenPlan={() => setActive("Meu plano")} onReprogram={() => { setAgendaReprogramRequest(value => value + 1); setActive("Meu plano"); }} />}
-              {active === "Hospitais" && <ResidencyProgramsPage />}
+              {active === "Hospitais" && <ResidencyProgramsPage specialty={residencySpecialty} setSpecialty={setResidencySpecialty} />}
               {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyCards={dailyCards} mockExamCadence={mockExamCadence} reprogramRequest={agendaReprogramRequest} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onSetStudied={setTopicStudyState} />}
               {active === "Flashcards" && <FlashcardsPage logs={questionLogs} exams={mockExams} banks={banks} dailyCards={dailyCards} setToast={setToast} profileId={activeProfileId} studiedTopics={studiedTopics} onOpenTopics={() => setActive("Assuntos")} onSaveStatus={setSaveStatus} />}
               {active === "Questões" && <QuestionsPage logs={questionLogs} setLogs={setQuestionLogs} setToast={setToast} setStudiedTopics={setStudiedTopics} />}
@@ -684,7 +735,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       {menuOpen && <div className="sidebar-backdrop" onClick={() => setMenuOpen(false)} />}
       {toast && <div className="toast"><Check size={18} />{toast}</div>}
 
-      {profileOpen && <div className="modal-backdrop profile-backdrop" onMouseDown={() => setProfileOpen(false)}><div className="profile-picker" role="dialog" aria-modal="true" aria-label="Escolher perfil" onMouseDown={event => event.stopPropagation()}><div className="profile-picker-head"><div><span className="section-kicker">QUEM ESTÁ ESTUDANDO?</span><h2>Escolha um perfil</h2><p>Cada perfil mantém agenda, métricas e progresso separados.</p></div><button className="icon-button" onClick={() => setProfileOpen(false)}><X size={20} /></button></div><div className="profile-grid">{profiles.map(profile => <button className={profile.id === activeProfileId ? "selected" : ""} key={profile.id} onClick={() => switchProfile(profile.id)}><span className="profile-avatar-large" style={{ background: profile.color }}>{profile.name.charAt(0).toUpperCase()}</span><strong>{profile.name}</strong><small>{profile.id === activeProfileId ? "Perfil atual" : "Entrar"}</small></button>)}{profiles.length < 8 && <div className="new-profile-card"><span className="profile-avatar-large empty"><UserPlus size={25} /></span><input aria-label="Nome do novo perfil" placeholder="Novo perfil" value={newProfileName} onChange={event => setNewProfileName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addProfile(); }} /><button onClick={addProfile}>Adicionar</button></div>}</div><div className="profile-limit"><Users size={15} /> {profiles.length} de 8 perfis utilizados</div></div></div>}
+      {profileOpen && <div className="modal-backdrop profile-backdrop" onMouseDown={() => setProfileOpen(false)}><div className="profile-picker" role="dialog" aria-modal="true" aria-label="Escolher perfil" onMouseDown={event => event.stopPropagation()}><div className="profile-picker-head"><div><span className="section-kicker">QUEM ESTÁ ESTUDANDO?</span><h2>Escolha um perfil</h2><p>Cada perfil mantém separadamente especialidade desejada, plano, agenda, metas, questões, simulados, assuntos e flashcards.</p></div><button className="icon-button" onClick={() => setProfileOpen(false)}><X size={20} /></button></div><div className="profile-grid">{profiles.map(profile => <button className={profile.id === activeProfileId ? "selected" : ""} key={profile.id} onClick={() => switchProfile(profile.id)}><span className="profile-avatar-large" style={{ background: profile.color }}>{profile.name.charAt(0).toUpperCase()}</span><strong>{profile.name}</strong><small>{profile.id === activeProfileId ? "Perfil atual" : "Entrar"}</small></button>)}{profiles.length < 8 && <div className="new-profile-card"><span className="profile-avatar-large empty"><UserPlus size={25} /></span><input aria-label="Nome do novo perfil" placeholder="Novo perfil" value={newProfileName} onChange={event => setNewProfileName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addProfile(); }} /><button onClick={addProfile}>Adicionar</button></div>}</div><div className="profile-limit"><Users size={15} /> {profiles.length} de 8 perfis utilizados · dados independentes</div></div></div>}
 
       {plannerOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setPlannerOpen(false)}>
@@ -811,8 +862,11 @@ function MentorshipPage({ agenda, logs, focusArea, target, probability, lessonGo
   </div>;
 }
 
-function ResidencyProgramsPage() {
-  const [specialty, setSpecialty] = useState<ResidencySpecialty>("Neurologia");
+function ResidencyProgramsPage({ specialty, setSpecialty }: { specialty: ResidencySpecialty | ""; setSpecialty: (specialty: ResidencySpecialty | "") => void }) {
+  if (!specialty) return <div className="page-stack residency-page">
+    <section className="residency-intro panel"><div><span className="section-kicker">MAPA DE PROGRAMAS · REFERÊNCIA 2026</span><h2>Escolha a especialidade deste perfil</h2><p>A escolha fica salva somente no perfil atual. Os demais perfis começam sem especialidade definida.</p></div><label>Grande área desejada<select value="" onChange={event => setSpecialty(event.target.value as ResidencySpecialty)}><option value="">Escolha a especialidade</option>{RESIDENCY_SPECIALTIES.map(item => <option key={item}>{item}</option>)}</select></label></section>
+    <section className="panel"><EmptyMini icon={<Stethoscope size={22} />} title="Nenhuma especialidade escolhida neste perfil" text="Selecione Pediatria, Ginecologia e Obstetrícia ou outra opção para carregar hospitais e notas de aprovação." /></section>
+  </div>;
   const scaleMaximum = (scale: ResidencyProgram["scale"]) => scale === "0–10" ? 10 : scale === "0–100" ? 100 : 1000;
   const safeTarget = (program: ResidencyProgram) => {
     const extra = program.scale === "0–10" ? .3 : program.scale === "0–100" ? 3 : 30;
@@ -825,7 +879,7 @@ function ResidencyProgramsPage() {
   };
 
   return <div className="page-stack residency-page">
-    <section className="residency-intro panel"><div><span className="section-kicker">MAPA DE PROGRAMAS · REFERÊNCIA 2026</span><h2>Compare a mesma especialidade sem misturar escalas</h2><p>A lista inteira é atualizada ao trocar a área: hospitais, corte observado e meta de segurança passam a refletir a especialidade selecionada.</p></div><label>Grande área desejada<select value={specialty} onChange={event => setSpecialty(event.target.value as ResidencySpecialty)}>{RESIDENCY_SPECIALTIES.map(item => <option key={item}>{item}</option>)}</select></label></section>
+    <section className="residency-intro panel"><div><span className="section-kicker">MAPA DE PROGRAMAS · REFERÊNCIA 2026</span><h2>Compare a mesma especialidade sem misturar escalas</h2><p>A lista inteira é atualizada ao trocar a área: hospitais, corte observado e meta de segurança passam a refletir a especialidade selecionada somente neste perfil.</p></div><label>Grande área desejada<select value={specialty} onChange={event => setSpecialty(event.target.value as ResidencySpecialty | "")}><option value="">Escolha a especialidade</option>{RESIDENCY_SPECIALTIES.map(item => <option key={item}>{item}</option>)}</select></label></section>
 
     <section className="residency-summary three-cards"><MetricCard icon={<Stethoscope />} label="Especialidade" value={specialty === "Otorrinolaringologia" ? "Otorrino" : specialty === "Radiologia" ? "Radio" : specialty} note={`${residencyPrograms.length} processos comparados`} /><MetricCard icon={<MapPinned />} label="Rede SES-PE" value={String(sesPeFacilities[specialty].length)} note="serviços do quadro oficial 2026" /><MetricCard icon={<Target />} label="Ano-base" value="2026" note="cortes históricos, não garantia" /></section>
 
