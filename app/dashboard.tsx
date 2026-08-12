@@ -109,7 +109,73 @@ type AgendaEvent = {
   completed?: boolean;
   studied?: boolean;
   customized?: boolean;
+  autoReprogrammedAt?: string;
 };
+
+type AgendaReprogramResult = {
+  events: AgendaEvent[];
+  overdueCount: number;
+  shiftedCount: number;
+  delayDays: number;
+};
+
+function addDaysToIso(iso: string, days: number) {
+  const date = new Date(`${iso}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return localDateIso(date);
+}
+
+function daysBetweenIso(fromIso: string, toIso: string) {
+  return Math.max(0, Math.round((new Date(`${toIso}T12:00:00`).getTime() - new Date(`${fromIso}T12:00:00`).getTime()) / 86400000));
+}
+
+function dateForAgendaDay(planStartIso: string, day: number) {
+  const start = new Date(`${planStartIso}T12:00:00`);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7) + day);
+  return localDateIso(start);
+}
+
+function reprogramAgendaWithoutOverload(items: AgendaEvent[], todayIso: string, currentDayIndex?: number): AgendaReprogramResult {
+  const isPast = (event: AgendaEvent) => event.date ? event.date < todayIso : currentDayIndex !== undefined && event.day < currentDayIndex;
+  const ensureDailyCards = (events: AgendaEvent[]) => {
+    const cardTemplate = events.find(event => event.type === "cards");
+    const todayDay = events.find(event => event.date === todayIso)?.day ?? currentDayIndex;
+    if (!cardTemplate || todayDay === undefined) return events;
+    const lastRouteDay = events.filter(event => event.type !== "cards").reduce((maximum, event) => Math.max(maximum, event.day), todayDay);
+    const existingCardDays = new Set(events.filter(event => event.type === "cards").map(event => event.day));
+    const extraCards: AgendaEvent[] = [];
+    for (let day = todayDay; day <= lastRouteDay; day += 1) {
+      if (existingCardDays.has(day)) continue;
+      extraCards.push({ ...cardTemplate, id: 86000 + day, day, date: addDaysToIso(todayIso, day - todayDay), completed: false, studied: false, autoReprogrammedAt: todayIso });
+    }
+    return [...events, ...extraCards];
+  };
+  const overdue = items.filter(event => event.type !== "cards" && !event.completed && isPast(event));
+  if (!overdue.length) {
+    const currentRoute = items.filter(event => !(event.type === "cards" && !event.completed && isPast(event)));
+    return { events: ensureDailyCards(currentRoute), overdueCount: 0, shiftedCount: 0, delayDays: 0 };
+  }
+
+  const datedOverdue = overdue.filter(event => event.date).sort((a, b) => a.date!.localeCompare(b.date!));
+  const oldestDate = datedOverdue[0]?.date;
+  const oldestDay = Math.min(...overdue.map(event => event.day));
+  const delayDays = oldestDate ? daysBetweenIso(oldestDate, todayIso) : Math.max(1, (currentDayIndex ?? oldestDay + 1) - oldestDay);
+  let shiftedCount = 0;
+  const events = items.flatMap(event => {
+    if (event.type === "cards" && !event.completed && isPast(event)) return [];
+    if (event.type === "cards" || event.completed) return [event];
+    const belongsToPendingRoute = event.date && oldestDate ? event.date >= oldestDate : event.day >= oldestDay;
+    if (!belongsToPendingRoute) return [event];
+    shiftedCount += 1;
+    return [{
+      ...event,
+      day: event.day + delayDays,
+      date: event.date ? addDaysToIso(event.date, delayDays) : undefined,
+      autoReprogrammedAt: todayIso,
+    }];
+  });
+  return { events: ensureDailyCards(events), overdueCount: overdue.length, shiftedCount, delayDays };
+}
 
 type RotationState = { area: string; start: string; end: string; boost: number };
 
@@ -331,7 +397,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const [appReady, setAppReady] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
-  const [todayIndex, setTodayIndex] = useState(0);
+  const [appTodayIso, setAppTodayIso] = useState(localDateIso());
   const [weeklyLessonGoal, setWeeklyLessonGoal] = useState(4);
   const [weeklyQuestionGoal, setWeeklyQuestionGoal] = useState(60);
   const [mentorshipCheckins, setMentorshipCheckins] = useState<MentorshipCheckin[]>([]);
@@ -396,9 +462,10 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
           setFocusArea((parsed.focusArea ?? legacyArea) as FocusArea);
           setFocusPercentage(parsed.focusPercentage ?? 70);
           setMockExamCadence(parsed.mockExamCadence ?? 4);
-          setWeeklyTopics(parsed.weeklyTopics ?? (legacyTopic ? [legacyTopic] : []));
+          const loadedLessonGoal = Math.max(1, Math.min(8, parsed.weeklyLessonGoal ?? 4));
+          setWeeklyTopics((parsed.weeklyTopics ?? (legacyTopic ? [legacyTopic] : [])).slice(0, loadedLessonGoal));
           setMockExams(parsed.mockExams ?? []);
-          setWeeklyLessonGoal(parsed.weeklyLessonGoal ?? 4);
+          setWeeklyLessonGoal(loadedLessonGoal);
           setWeeklyQuestionGoal(parsed.weeklyQuestionGoal ?? 60);
           setMentorshipCheckins(parsed.mentorshipCheckins ?? []);
           setResidencySpecialty(RESIDENCY_SPECIALTIES.includes(parsed.residencySpecialty as ResidencySpecialty) ? parsed.residencySpecialty as ResidencySpecialty : "");
@@ -428,8 +495,13 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, residencySpecialty, recalculated, hydrated, loadedMainProfileId, appReady, activeProfileId, ownerId]);
 
   useEffect(() => {
-    const timer = setTimeout(() => setTodayIndex((new Date().getDay() + 6) % 7), 0);
-    return () => clearTimeout(timer);
+    const updateCalendarDay = () => setAppTodayIso(current => {
+      const actual = localDateIso();
+      return current === actual ? current : actual;
+    });
+    updateCalendarDay();
+    const timer = window.setInterval(updateCalendarDay, 60000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -449,10 +521,24 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
         const result = await supabase?.from("profile_states").select("data").eq("profile_id", requestedProfileId).eq("scope", "agenda").maybeSingle();
         if (cancelled) return;
         const localKey = `gps-agenda-state-${requestedProfileId}`;
-        let localData: { events?: AgendaEvent[]; rotation?: RotationState; suggestionKey?: string } | null = null;
+        let localData: { events?: AgendaEvent[]; rotation?: RotationState; suggestionKey?: string; weekTopicChoices?: Record<string, string[]>; deletedGeneratedIds?: number[]; planStartIso?: string; lastAutoReprogramIso?: string } | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
         const parsed = (result?.data?.data as typeof localData) ?? localData;
-        setAgendaPreview(parsed?.events ?? []);
+        let previewEvents = (parsed?.events ?? []).map(event => event.date || !parsed?.planStartIso ? event : { ...event, date: dateForAgendaDay(parsed.planStartIso, event.day) });
+        let lastAutoReprogramIso = parsed?.lastAutoReprogramIso ?? "";
+        if (lastAutoReprogramIso !== appTodayIso && previewEvents.length) {
+          const reprogrammed = reprogramAgendaWithoutOverload(previewEvents, appTodayIso);
+          previewEvents = reprogrammed.events;
+          lastAutoReprogramIso = appTodayIso;
+          const updatedState = { ...(parsed ?? {}), events: previewEvents, lastAutoReprogramIso };
+          localStorage.setItem(localKey, JSON.stringify(updatedState));
+          if (supabase && requestedProfileId !== "joao") {
+            const { error: reprogramError } = await supabase.from("profile_states").upsert({ profile_id: requestedProfileId, scope: "agenda", data: updatedState, updated_at: new Date().toISOString() });
+            if (reprogramError) setToast(`A rota foi atualizada neste aparelho, mas a nuvem falhou: ${reprogramError.message}`);
+          }
+          if (reprogrammed.overdueCount) setToast(`${reprogrammed.overdueCount} bloco${reprogrammed.overdueCount > 1 ? "s" : ""} pendente${reprogrammed.overdueCount > 1 ? "s" : ""} ${reprogrammed.overdueCount > 1 ? "avançaram" : "avançou"} para hoje. O restante da rota foi deslocado sem acumular tarefas.`);
+        }
+        setAgendaPreview(previewEvents);
         setAgendaRotation(parsed?.rotation ?? { area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 });
         setAgendaSuggestionKey(parsed?.suggestionKey ?? "");
         setAgendaPreviewProfileId(requestedProfileId);
@@ -460,7 +546,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       loadAgendaPreview();
     }, 0);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [activeProfileId, appReady]);
+  }, [activeProfileId, appReady, appTodayIso]);
 
   useEffect(() => {
     if (!toast) return;
@@ -474,7 +560,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const probability = questionLogs.length ? Math.min(91, 45 + done.length * 3 + (recalculated ? 2 : 0)) : 0;
   const dailyCards = studiedTopics.length ? Math.min(45, 10 + questionLogs.reduce((sum, log) => sum + (log.accuracy < 50 ? 4 : log.accuracy < 70 ? 2 : 1), 0)) : 0;
   const totalBankWeight = Object.values(banks).reduce((sum, value) => sum + value, 0);
-  const todayAgenda = agendaPreviewProfileId === activeProfileId ? agendaPreview.filter(event => event.date ? event.date === localDateIso() : event.day === todayIndex) : [];
+  const todayAgenda = agendaPreviewProfileId === activeProfileId ? agendaPreview.filter(event => event.date === appTodayIso) : [];
   const prioritySuggestions = useMemo<PrioritySuggestion[]>(() => {
     const scores = new Map<string, { score: number; sourceBank: string }>();
     bankPriorities.forEach(bank => {
@@ -556,10 +642,13 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       const next = previous.map(event => event.id === id ? action === "study" ? { ...event, studied: nextStudied, completed: nextStudied ? true : event.completed } : { ...event, completed: !event.completed } : event);
       const selected = next.find(event => event.id === id);
       if (action === "study" && selected) setTopicStudyState(selected.topic, nextStudied);
+      const localKey = `gps-agenda-state-${activeProfileId}`;
+      let savedAgenda: Record<string, unknown> = {};
+      try { savedAgenda = JSON.parse(localStorage.getItem(localKey) ?? "{}") as Record<string, unknown>; } catch { savedAgenda = {}; }
+      const state = { ...savedAgenda, events: next, rotation: agendaRotation, suggestionKey: agendaSuggestionKey };
+      localStorage.setItem(localKey, JSON.stringify(state));
       if (supabase && activeProfileId !== "joao") {
         const client = supabase;
-        const state = { events: next, rotation: agendaRotation, suggestionKey: agendaSuggestionKey };
-        localStorage.setItem(`gps-agenda-state-${activeProfileId}`, JSON.stringify(state));
         setSaveStatus("saving");
         agendaHomeSaveQueue.current = agendaHomeSaveQueue.current.then(async () => {
           const { error } = await client.from("profile_states").upsert({ profile_id: activeProfileId, scope: "agenda", data: state, updated_at: new Date().toISOString() });
@@ -571,12 +660,21 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   }
 
   function addWeeklyTopic(value = plannerTopicDraft) {
-    const topic = value.trim();
-    if (!topic) return setToast("Escolha um assunto para incluir na semana.");
-    if (weeklyTopics.includes(topic)) return setToast("Esse assunto já está na semana.");
+    const requested = value.trim();
+    const matched = topicBank.find(topic => topic.title.toLocaleLowerCase("pt-BR") === requested.toLocaleLowerCase("pt-BR"));
+    if (!matched) return setToast("Escolha um assunto cadastrado para incluir na semana.");
+    const topic = matched.title;
+    if (weeklyTopics.some(item => item.toLocaleLowerCase("pt-BR") === topic.toLocaleLowerCase("pt-BR"))) return setToast("Esse assunto já está na semana.");
+    if (weeklyTopics.length >= weeklyLessonGoal) return setToast(`A semana já tem ${weeklyLessonGoal} assunto${weeklyLessonGoal > 1 ? "s" : ""} escolhido${weeklyLessonGoal > 1 ? "s" : ""}. Use Meu plano para substituir uma aula sem aumentar a meta.`);
     setWeeklyTopics(previous => [...previous, topic]);
     setPlannerTopicDraft("");
     setToast(`${topic} foi incluído como complemento da semana.`);
+  }
+
+  function updateWeeklyLessonGoal(value: number) {
+    const nextGoal = Math.max(1, Math.min(8, value));
+    setWeeklyLessonGoal(nextGoal);
+    setWeeklyTopics(previous => previous.slice(0, nextGoal));
   }
 
   function savePlanner() {
@@ -716,12 +814,12 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
           ) : (
             <section className="secondary-page" key={activeProfileId}>
               <div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO</p><h1>{sectionTitle[active]}</h1><p>Todos os dados abaixo conversam com sua rota diária e são recalculados conforme seu progresso.</p></div>{!(["Mentoria", "Hospitais", "Meu plano", "Flashcards", "Questões", "Assuntos", "Prioridades"].includes(active)) && <button className="primary-button" onClick={() => active === "Bancas e metas" ? setPlannerOpen(true) : setToast("Novo registro adicionado à sua fila.")}><Plus size={17} /> {active === "Bancas e metas" ? "Ajustar metas" : "Novo registro"}</button>}</div>
-              {active === "Mentoria" && <MentorshipPage agenda={agendaPreview} logs={questionLogs} focusArea={focusArea} target={target} probability={probability} lessonGoal={weeklyLessonGoal} questionGoal={weeklyQuestionGoal} setLessonGoal={setWeeklyLessonGoal} setQuestionGoal={setWeeklyQuestionGoal} checkins={mentorshipCheckins} setCheckins={setMentorshipCheckins} setToast={setToast} onOpenPlan={() => setActive("Meu plano")} onReprogram={() => { setAgendaReprogramRequest(value => value + 1); setActive("Meu plano"); }} />}
+              {active === "Mentoria" && <MentorshipPage agenda={agendaPreview} logs={questionLogs} focusArea={focusArea} target={target} probability={probability} lessonGoal={weeklyLessonGoal} questionGoal={weeklyQuestionGoal} setLessonGoal={updateWeeklyLessonGoal} setQuestionGoal={setWeeklyQuestionGoal} checkins={mentorshipCheckins} setCheckins={setMentorshipCheckins} setToast={setToast} onOpenPlan={() => setActive("Meu plano")} onReprogram={() => { setAgendaReprogramRequest(value => value + 1); setActive("Meu plano"); }} />}
               {active === "Hospitais" && <ResidencyProgramsPage specialty={residencySpecialty} setSpecialty={setResidencySpecialty} />}
-              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} priorities={prioritySuggestions} questionLogs={questionLogs} dailyCards={dailyCards} mockExamCadence={mockExamCadence} reprogramRequest={agendaReprogramRequest} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onSetStudied={setTopicStudyState} />}
+              {active === "Meu plano" && <PlanPage setToast={setToast} profileId={activeProfileId} focusArea={focusArea} focusPercentage={focusPercentage} weeklyTopics={weeklyTopics} setWeeklyTopics={setWeeklyTopics} lessonGoal={weeklyLessonGoal} priorities={prioritySuggestions} questionLogs={questionLogs} dailyCards={dailyCards} mockExamCadence={mockExamCadence} reprogramRequest={agendaReprogramRequest} onFocusAreaChange={area => { setFocusArea(area); setDone(prev => prev.includes(2) ? prev : [...prev, 2]); }} onSaveStatus={setSaveStatus} onAgendaChange={handleAgendaChange} onSetStudied={setTopicStudyState} />}
               {active === "Flashcards" && <FlashcardsPage logs={questionLogs} exams={mockExams} banks={banks} dailyCards={dailyCards} setToast={setToast} profileId={activeProfileId} studiedTopics={studiedTopics} onOpenTopics={() => setActive("Assuntos")} onSaveStatus={setSaveStatus} />}
               {active === "Questões" && <QuestionsPage logs={questionLogs} setLogs={setQuestionLogs} setToast={setToast} setStudiedTopics={setStudiedTopics} />}
-              {active === "Assuntos" && <TopicsPage studiedTopics={studiedTopics} setStudiedTopics={setStudiedTopics} setToast={setToast} focusArea={focusArea} weeklyTopics={weeklyTopics} setWeeklyTopics={setWeeklyTopics} />}
+              {active === "Assuntos" && <TopicsPage studiedTopics={studiedTopics} setStudiedTopics={setStudiedTopics} setToast={setToast} focusArea={focusArea} weeklyTopics={weeklyTopics} setWeeklyTopics={setWeeklyTopics} lessonGoal={weeklyLessonGoal} />}
               {active === "Prioridades" && <PrioritiesPage banks={banks} priorities={prioritySuggestions} onConfigure={() => setPlannerOpen(true)} />}
               {active === "Desempenho" && <PerformancePage probability={probability} hasData={questionLogs.length > 0} logs={questionLogs} />}
               {active === "Simulados" && <SimuladosPage exams={mockExams} setExams={setMockExams} setToast={setToast} />}
@@ -745,6 +843,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
             <div className="bank-fields bank-fields-expanded">
               {bankPriorities.map(bank => <label key={bank.key}><span><b>{bank.name}</b><small>{bank.short}</small></span><div><input aria-label={`Peso ${bank.name}`} type="number" min="0" max="100" value={banks[bank.key]} onChange={e => setBanks({ ...banks, [bank.key]: Number(e.target.value) })} /><em>%</em></div></label>)}
             </div>
+            <label className="plain-field focus-field">Aulas por semana<select value={weeklyLessonGoal} onChange={event => updateWeeklyLessonGoal(Number(event.target.value))}>{Array.from({ length: 8 }, (_, index) => index + 1).map(value => <option value={value} key={value}>{value} aula{value > 1 ? "s" : ""} por semana{value === 4 ? " · recomendado" : ""}</option>)}</select><small>O calendário respeita exatamente esta meta. Aulas extras só entram quando você usa “Adicionar bloco”. Com 4 aulas, ficam 2 no D1 e 2 no D2.</small></label>
             <label className="plain-field focus-field">Grande área de foco da semana<select value={focusArea} onChange={event => setFocusArea(event.target.value as FocusArea)}><option value="">Escolha a grande área</option>{STUDY_AREAS.map(area => <option value={area} key={area}>{area}</option>)}</select><small>O cronograma escolherá os assuntos dessa área conforme o peso e a incidência das bancas.</small></label>
             <label className="range-label focus-percentage"><span><b>Quanto da semana dedicar à área escolhida?</b><strong>{focusPercentage}%</strong></span><input type="range" min="50" max="90" step="5" value={focusPercentage} onChange={event => setFocusPercentage(Number(event.target.value))} /><small>Os outros {100 - focusPercentage}% serão preenchidos com temas de maior retorno de outras áreas e das suas bancas.</small></label>
             <div className="weekly-topic-picker"><label className="plain-field">Assunto específico opcional<div><input list="planner-topics" value={plannerTopicDraft} onChange={event => setPlannerTopicDraft(event.target.value)} placeholder="Ex.: Síndromes Hipertensivas da Gestação" onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addWeeklyTopic(); } }} /><button type="button" onClick={() => addWeeklyTopic()}><Plus size={16} /> Incluir</button></div><datalist id="planner-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist><small>Use apenas quando quiser garantir que um assunto específico apareça nesta semana.</small></label>{weeklyTopics.length > 0 && <div className="weekly-topic-chips">{weeklyTopics.map(topic => <span key={topic}>{topic}<button type="button" aria-label={`Remover ${topic}`} onClick={() => setWeeklyTopics(previous => previous.filter(item => item !== topic))}><X size={13} /></button></span>)}</div>}</div>
@@ -894,9 +993,23 @@ function ResidencyProgramsPage({ specialty, setSpecialty }: { specialty: Residen
   </div>;
 }
 
-function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, priorities, questionLogs, dailyCards, mockExamCadence, reprogramRequest, onFocusAreaChange, onSaveStatus, onAgendaChange, onSetStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyCards: number; mockExamCadence: 3 | 4; reprogramRequest: number; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onSetStudied: (topic: string, studied: boolean) => void }) {
-  const teachingWeeks = Math.ceil(topicBank.length / 4);
-  const calendarWeeks = teachingWeeks + 18;
+function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopics, setWeeklyTopics, lessonGoal, priorities, questionLogs, dailyCards, mockExamCadence, reprogramRequest, onFocusAreaChange, onSaveStatus, onAgendaChange, onSetStudied }: { setToast: (message: string) => void; profileId: string; focusArea: FocusArea; focusPercentage: number; weeklyTopics: string[]; setWeeklyTopics: React.Dispatch<React.SetStateAction<string[]>>; lessonGoal: number; priorities: PrioritySuggestion[]; questionLogs: QuestionLog[]; dailyCards: number; mockExamCadence: 3 | 4; reprogramRequest: number; onFocusAreaChange: (area: FocusArea) => void; onSaveStatus: (status: SaveStatus) => void; onAgendaChange: (events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => void; onSetStudied: (topic: string, studied: boolean) => void }) {
+  const lessonsPerWeek = Math.max(1, Math.min(8, lessonGoal));
+  const topicKey = (title: string) => title.trim().toLocaleLowerCase("pt-BR");
+  const planningTopics = useMemo(() => {
+    const seen = new Set<string>();
+    return topicBank.filter(topic => {
+      const key = topicKey(topic.title);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, []);
+  const teachingWeeks = Math.ceil(planningTopics.length / lessonsPerWeek);
+  const generationLength = (teachingWeeks + 18) * 7;
+  const [events, setEvents] = useState<AgendaEvent[]>(initialAgenda);
+  const furthestEventDay = events.reduce((maximum, event) => Math.max(maximum, event.day), generationLength - 1);
+  const calendarWeeks = Math.max(teachingWeeks + 18, Math.ceil((furthestEventDay + 1) / 7));
   const calendarLength = calendarWeeks * 7;
   const [planStartIso, setPlanStartIso] = useState(localDateIso());
   const calendarDays = useMemo(() => {
@@ -906,7 +1019,6 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   }, [calendarLength, planStartIso]);
   const [weekOffset, setWeekOffset] = useState(0);
   const visibleDays = calendarDays.slice(weekOffset * 7, weekOffset * 7 + 7);
-  const [events, setEvents] = useState<AgendaEvent[]>(initialAgenda);
   const [dragged, setDragged] = useState<number | null>(null);
   const [rotationOpen, setRotationOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -916,21 +1028,32 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   const [weekTopicChoices, setWeekTopicChoices] = useState<Record<string, string[]>>({});
   const [deletedGeneratedIds, setDeletedGeneratedIds] = useState<number[]>([]);
   const [weekTopicDraft, setWeekTopicDraft] = useState("");
+  const [pendingReplacement, setPendingReplacement] = useState("");
   const [agendaHydrated, setAgendaHydrated] = useState(false);
+  const [todayIso, setTodayIso] = useState(localDateIso());
+  const [lastAutoReprogramIso, setLastAutoReprogramIso] = useState("");
   const agendaSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const loadedSuggestionKey = useRef("");
   const lastReprogramRequest = useRef(0);
-  const todayIso = localDateIso();
   const planningStartIndex = Math.max(0, calendarDays.findIndex(day => day.iso === planStartIso));
   const locatedCurrentDay = calendarDays.findIndex(day => day.iso === todayIso);
   const currentDayIndex = locatedCurrentDay >= 0 ? locatedCurrentDay : calendarLength - 1;
+
+  useEffect(() => {
+    const updateCalendarDay = () => setTodayIso(current => {
+      const actual = localDateIso();
+      return current === actual ? current : actual;
+    });
+    updateCalendarDay();
+    const timer = window.setInterval(updateCalendarDay, 60000);
+    return () => window.clearInterval(timer);
+  }, []);
   const suggestedAgenda = useMemo<AgendaEvent[]>(() => {
     if (!focusArea) return [];
-    const lessonsPerWeek = 4;
     const rank = new Map(priorities.map(item => [item.topic, item.rank]));
     const byPriority = (a: StudyTopic, b: StudyTopic) => (rank.get(a.title) ?? 9999) - (rank.get(b.title) ?? 9999) || a.title.localeCompare(b.title, "pt-BR");
-    const focusPool = topicBank.filter(topic => topic.area === focusArea).slice().sort(byPriority);
-    const mixedPool = topicBank.filter(topic => topic.area !== focusArea).slice().sort(byPriority);
+    const focusPool = planningTopics.filter(topic => topic.area === focusArea).slice().sort(byPriority);
+    const mixedPool = planningTopics.filter(topic => topic.area !== focusArea).slice().sort(byPriority);
     const orderedTopics: StudyTopic[] = [];
     let focusCursor = 0; let mixedCursor = 0;
     while (focusCursor < focusPool.length || mixedCursor < mixedPool.length) {
@@ -938,25 +1061,40 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       if ((currentShare < focusPercentage && focusCursor < focusPool.length) || mixedCursor >= mixedPool.length) orderedTopics.push(focusPool[focusCursor++]);
       else orderedTopics.push(mixedPool[mixedCursor++]);
     }
-    const explicitByWeek: Record<string, string[]> = { ...weekTopicChoices };
-    if (!explicitByWeek["0"]?.length && weeklyTopics.length) explicitByWeek["0"] = weeklyTopics.slice(0, 4);
-    const remainingTopics = orderedTopics.slice();
-    Object.values(explicitByWeek).flat().forEach(title => {
-      const index = remainingTopics.findIndex(topic => topic.title === title);
-      if (index >= 0) remainingTopics.splice(index, 1);
-    });
+    const rawExplicit: Record<string, string[]> = { ...weekTopicChoices };
+    if (!rawExplicit["0"]?.length && weeklyTopics.length) rawExplicit["0"] = weeklyTopics;
+    const explicitByWeek: Record<string, string[]> = {};
+    const explicitlyScheduled = new Set<string>();
+    for (let week = 0; week < teachingWeeks; week += 1) {
+      const choices: string[] = [];
+      for (const title of rawExplicit[String(week)] ?? []) {
+        const matched = planningTopics.find(topic => topicKey(topic.title) === topicKey(title));
+        const key = matched ? topicKey(matched.title) : "";
+        if (!matched || explicitlyScheduled.has(key) || choices.length >= lessonsPerWeek) continue;
+        explicitlyScheduled.add(key);
+        choices.push(matched.title);
+      }
+      if (choices.length) explicitByWeek[String(week)] = choices;
+    }
+    const remainingTopics = orderedTopics.filter(topic => !explicitlyScheduled.has(topicKey(topic.title)));
     const generated: AgendaEvent[] = [];
+    const scheduledTopics = new Set<string>();
     let eventId = 81000;
     let automaticCursor = 0;
     for (let week = 0; week < teachingWeeks; week += 1) {
       const base = planningStartIndex + week * 7;
-      const chosenForWeek = (explicitByWeek[String(week)] ?? []).slice(0, 4);
-      const weekLessons = chosenForWeek.map(title => ({ title, area: topicBank.find(topic => topic.title === title)?.area ?? focusArea } as StudyTopic));
-      while (weekLessons.length < lessonsPerWeek && automaticCursor < remainingTopics.length) weekLessons.push(remainingTopics[automaticCursor++]);
+      const chosenForWeek = (explicitByWeek[String(week)] ?? []).slice(0, lessonsPerWeek);
+      const weekLessons = chosenForWeek.map(title => planningTopics.find(topic => topicKey(topic.title) === topicKey(title))).filter((topic): topic is StudyTopic => Boolean(topic));
+      while (weekLessons.length < lessonsPerWeek && automaticCursor < remainingTopics.length) {
+        const candidate = remainingTopics[automaticCursor++];
+        if (!scheduledTopics.has(topicKey(candidate.title))) weekLessons.push(candidate);
+      }
       weekLessons.forEach((lesson, lessonIndex) => {
         const topic = lesson.title;
+        scheduledTopics.add(topicKey(topic));
         const priority = priorities.find(item => item.topic === topic);
-        const theoryDay = base + (lessonIndex < 2 ? 0 : 1);
+        const firstDayCount = Math.ceil(lessonsPerWeek / 2);
+        const theoryDay = base + (lessonIndex < firstDayCount ? 0 : 1);
         const questionDay = base + 2;
         generated.push({ id: eventId++, day: theoryDay, topic, meta: `Aula completa · cerca de 2h · ${lesson.area} · ${priority?.sourceBank ?? "sequência pedagógica"}`, type: "theory" });
         generated.push({ id: eventId++, day: questionDay, topic, meta: "Primeiro bloco · 15 questões da aula · corrigir e registrar o percentual", type: "questions" });
@@ -972,24 +1110,30 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
         let reviewDay = reviewStart;
         intervals.forEach((interval, reviewIndex) => {
           reviewDay += interval;
-          if (reviewDay < 0 || reviewDay >= calendarLength) return;
+          if (reviewDay < 0 || reviewDay >= generationLength) return;
           const stage = reviewIndex + 1;
           generated.push({ id: eventId++, day: reviewDay, topic, meta: `Revisão ${stage} · ${questionVolumes[reviewIndex]} questões curtas + flashcards · intervalo ${interval}d · último acerto ${latest ? `${accuracy}%${trend}` : "a medir no D3"}`, type: "review" });
         });
       });
-      generated.push({ id: eventId++, day: base + 1, topic: "Confecção e revisão de materiais", meta: "Organizar resumos, imagens, algoritmos e dúvidas das 4 aulas · bloco livre e editável", type: "materials" });
+      generated.push({ id: eventId++, day: base + 1, topic: "Confecção e revisão de materiais", meta: `Organizar resumos, imagens, algoritmos e dúvidas das ${weekLessons.length} aulas · bloco livre e editável`, type: "materials" });
     }
     const cardGoal = Math.max(10, dailyCards);
-    for (let day = planningStartIndex; day < calendarLength; day += 1) generated.push({ id: 86000 + day, day, topic: "Fila diária adaptativa", meta: `${cardGoal} flashcards vencidos + novos · intervalo individual`, type: "cards" });
+    for (let day = planningStartIndex; day < generationLength; day += 1) generated.push({ id: 86000 + day, day, topic: "Fila diária adaptativa", meta: `${cardGoal} flashcards vencidos + novos · intervalo individual`, type: "cards" });
     let mockIndex = 0;
-    for (let mockDay = planningStartIndex + mockExamCadence * 7 - 2; mockDay < calendarLength; mockDay += mockExamCadence * 7) {
+    for (let mockDay = planningStartIndex + mockExamCadence * 7 - 2; mockDay < generationLength; mockDay += mockExamCadence * 7) {
       generated.push({ id: 88000 + mockIndex * 2, day: mockDay, topic: "Prova completa", meta: "Simulado integral · 4h · condições reais de prova", type: "mock" });
-      if (mockDay + 1 < calendarLength) generated.push({ id: 88001 + mockIndex * 2, day: mockDay + 1, topic: "Correção da prova completa", meta: "2h · classificar erros, registrar o novo acerto e recalcular revisões", type: "correction" });
+      if (mockDay + 1 < generationLength) generated.push({ id: 88001 + mockIndex * 2, day: mockDay + 1, topic: "Correção da prova completa", meta: "2h · classificar erros, registrar o novo acerto e recalcular revisões", type: "correction" });
       mockIndex += 1;
     }
-    return generated.map(event => ({ ...event, date: calendarDays[event.day]?.iso }));
-  }, [focusArea, focusPercentage, weeklyTopics, weekTopicChoices, priorities, questionLogs, dailyCards, mockExamCadence, calendarDays, calendarLength, planningStartIndex, currentDayIndex, teachingWeeks]);
-  const suggestionKey = useMemo(() => JSON.stringify({ calendarStart: calendarDays[0]?.iso, focusArea, focusPercentage, weeklyTopics, weekTopicChoices, mockExamCadence, suggested: suggestedAgenda.map(event => [event.day, event.topic, event.meta]) }), [calendarDays, focusArea, focusPercentage, weeklyTopics, weekTopicChoices, mockExamCadence, suggestedAgenda]);
+    const seenEvents = new Set<string>();
+    return generated.filter(event => {
+      const key = `${event.day}|${event.type}|${topicKey(event.topic)}`;
+      if (seenEvents.has(key)) return false;
+      seenEvents.add(key);
+      return true;
+    }).map(event => ({ ...event, date: calendarDays[event.day]?.iso }));
+  }, [focusArea, focusPercentage, weeklyTopics, weekTopicChoices, priorities, questionLogs, dailyCards, mockExamCadence, calendarDays, generationLength, planningStartIndex, currentDayIndex, teachingWeeks, lessonsPerWeek, planningTopics]);
+  const suggestionKey = useMemo(() => JSON.stringify({ calendarStart: calendarDays[0]?.iso, focusArea, focusPercentage, lessonsPerWeek, weeklyTopics, weekTopicChoices, mockExamCadence, suggested: suggestedAgenda.map(event => [event.day, event.topic, event.meta]) }), [calendarDays, focusArea, focusPercentage, lessonsPerWeek, weeklyTopics, weekTopicChoices, mockExamCadence, suggestedAgenda]);
   const suggestionSnapshot = useRef({ agenda: suggestedAgenda, key: suggestionKey });
   useEffect(() => { suggestionSnapshot.current = { agenda: suggestedAgenda, key: suggestionKey }; }, [suggestedAgenda, suggestionKey]);
 
@@ -1000,95 +1144,130 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
         const suggestion = suggestionSnapshot.current;
         const result = await supabase?.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "agenda").maybeSingle();
         const localKey = `gps-agenda-state-${profileId}`;
-        let localData: { events?: AgendaEvent[]; rotation?: typeof rotation; suggestionKey?: string; weekTopicChoices?: Record<string, string[]>; deletedGeneratedIds?: number[]; planStartIso?: string } | null = null;
+        let localData: { events?: AgendaEvent[]; rotation?: typeof rotation; suggestionKey?: string; weekTopicChoices?: Record<string, string[]>; deletedGeneratedIds?: number[]; planStartIso?: string; lastAutoReprogramIso?: string } | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
         const parsed = result?.data?.data ?? localData;
         if (parsed) {
           const loadedStart = parsed.planStartIso ?? localDateIso();
           setPlanStartIso(loadedStart);
-          setEvents(Array.isArray(parsed.events) ? parsed.events : suggestion.agenda);
+          if (Array.isArray(parsed.events)) {
+            const seen = new Set<string>();
+            setEvents(parsed.events.filter((event: AgendaEvent) => {
+              const key = `${event.day}|${event.type}|${topicKey(event.topic)}`;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            }).map((event: AgendaEvent) => event.date ? event : { ...event, date: dateForAgendaDay(loadedStart, event.day) }));
+          } else setEvents(suggestion.agenda);
           const loadedDate = new Date(`${loadedStart}T12:00:00`); loadedDate.setDate(loadedDate.getDate() - ((loadedDate.getDay() + 6) % 7));
           const dayDistance = Math.max(0, Math.floor((new Date(`${localDateIso()}T12:00:00`).getTime() - loadedDate.getTime()) / 86400000));
-          setWeekOffset(Math.min(calendarWeeks - 1, Math.floor(dayDistance / 7)));
+          setWeekOffset(Math.floor(dayDistance / 7));
           setRotation(currentRotation => parsed.rotation ?? currentRotation);
           setWeekTopicChoices(parsed.weekTopicChoices ?? {});
           setDeletedGeneratedIds(parsed.deletedGeneratedIds ?? []);
-        } else { setPlanStartIso(localDateIso()); setEvents(suggestion.agenda); setRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 }); setWeekTopicChoices({}); setDeletedGeneratedIds([]); }
+          setLastAutoReprogramIso(parsed.lastAutoReprogramIso ?? "");
+        } else { setPlanStartIso(localDateIso()); setEvents(suggestion.agenda); setRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 }); setWeekTopicChoices({}); setDeletedGeneratedIds([]); setLastAutoReprogramIso(""); }
         loadedSuggestionKey.current = parsed ? parsed.suggestionKey ?? "" : suggestion.key;
         setAgendaHydrated(true);
       };
       loadAgenda();
     }, 0);
     return () => clearTimeout(timer);
-  }, [profileId, calendarWeeks]);
+  }, [profileId]);
 
   useEffect(() => {
     if (!agendaHydrated || loadedSuggestionKey.current === suggestionKey) return;
     setEvents(previous => {
       const preserved = previous.filter(event => event.id < 81000 || event.id >= 90000 || event.customized);
       const preservedIds = new Set(preserved.map(event => event.id));
+      const preservedGeneratedTopics = new Set(preserved.filter(event => event.id >= 81000 && event.id < 90000 && event.customized).map(event => `${event.type}|${topicKey(event.topic)}`));
       const previousById = new Map(previous.map(event => [event.id, event]));
-      const refreshed = suggestedAgenda.filter(event => !deletedGeneratedIds.includes(event.id) && !preservedIds.has(event.id)).map(event => {
+      const refreshed = suggestedAgenda.filter(event => !deletedGeneratedIds.includes(event.id) && !preservedIds.has(event.id) && !preservedGeneratedTopics.has(`${event.type}|${topicKey(event.topic)}`)).map(event => {
         const old = previousById.get(event.id);
         return old ? { ...event, completed: old.completed, studied: old.studied } : event;
       });
-      return [...preserved, ...refreshed];
+      const seen = new Set<string>();
+      return [...preserved, ...refreshed].filter(event => {
+        const key = `${event.day}|${event.type}|${topicKey(event.topic)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     });
     loadedSuggestionKey.current = suggestionKey;
+    setLastAutoReprogramIso("");
     setToast(focusArea ? `Cronograma recalculado para ${focusArea}, respeitando as prioridades das bancas.` : "Escolha uma grande área para gerar a semana.");
   }, [agendaHydrated, suggestionKey, suggestedAgenda, focusArea, setToast, deletedGeneratedIds]);
 
-  const reprogramOverdue = useCallback(() => {
-    setEvents(previous => {
-      const overdue = previous.filter(event => event.day < currentDayIndex && !event.completed && event.type !== "cards").sort((a, b) => a.day - b.day);
-      const preserved = previous.filter(event => !overdue.some(item => item.id === event.id) && !(event.day < currentDayIndex && !event.completed && event.type === "cards"));
-      if (!overdue.length) { setToast("Sua agenda está em dia. Nenhum bloco precisou ser movido."); return preserved; }
-      const load = new Map<number, number>();
-      preserved.filter(event => event.day >= currentDayIndex && event.type !== "cards").forEach(event => load.set(event.day, (load.get(event.day) ?? 0) + 1));
-      const redistributed = overdue.map(event => {
-        let day = currentDayIndex;
-        while (day < calendarLength - 1 && (load.get(day) ?? 0) >= 4) day += 1;
-        load.set(day, (load.get(day) ?? 0) + 1);
-        return { ...event, day, date: calendarDays[day]?.iso, meta: `${event.meta} · reprogramado automaticamente`, customized: true };
-      });
-      setWeekOffset(Math.floor(currentDayIndex / 7));
-      setToast(`${overdue.length} blocos atrasados foram redistribuídos a partir de hoje, sem apagar revisões concluídas.`);
-      return [...preserved, ...redistributed];
-    });
-  }, [calendarDays, calendarLength, currentDayIndex, setToast]);
+  const reprogramOverdue = useCallback((automatic = false) => {
+    const result = reprogramAgendaWithoutOverload(events, todayIso, currentDayIndex);
+    setEvents(result.events);
+    setLastAutoReprogramIso(todayIso);
+    setWeekOffset(Math.min(calendarWeeks - 1, Math.floor(currentDayIndex / 7)));
+    if (result.overdueCount) {
+      setToast(`${result.overdueCount} bloco${result.overdueCount > 1 ? "s" : ""} atrasado${result.overdueCount > 1 ? "s" : ""} ${result.overdueCount > 1 ? "foram movidos" : "foi movido"} para hoje. Toda a rota pendente avançou ${result.delayDays} dia${result.delayDays > 1 ? "s" : ""}, sem juntar cargas.`);
+    } else if (!automatic) setToast("Sua agenda está em dia. Hoje já está sincronizado e nenhuma tarefa foi acumulada.");
+  }, [events, todayIso, currentDayIndex, calendarWeeks, setToast]);
+
+  useEffect(() => {
+    if (!agendaHydrated || lastAutoReprogramIso === todayIso) return;
+    const timer = window.setTimeout(() => reprogramOverdue(true), 0);
+    return () => window.clearTimeout(timer);
+  }, [agendaHydrated, lastAutoReprogramIso, todayIso, reprogramOverdue]);
 
   useEffect(() => {
     if (!agendaHydrated || !reprogramRequest || lastReprogramRequest.current === reprogramRequest) return;
     lastReprogramRequest.current = reprogramRequest;
-    reprogramOverdue();
+    reprogramOverdue(false);
   }, [agendaHydrated, reprogramRequest, reprogramOverdue]);
 
   useEffect(() => {
-    if (!agendaHydrated || !supabase || profileId === "joao") return;
-    const client = supabase;
-    const state = { events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, planStartIso };
+    if (!agendaHydrated) return;
+    const state = { events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, planStartIso, lastAutoReprogramIso };
     localStorage.setItem(`gps-agenda-state-${profileId}`, JSON.stringify(state));
     onAgendaChange(events, rotation, suggestionKey);
+    if (!supabase || profileId === "joao") { onSaveStatus("saved"); return; }
+    const client = supabase;
     onSaveStatus("saving");
     agendaSaveQueue.current = agendaSaveQueue.current.then(async () => {
       const { error } = await client.from("profile_states").upsert({ profile_id: profileId, scope: "agenda", data: state, updated_at: new Date().toISOString() });
       if (error) { onSaveStatus("error"); setToast(`Falha ao salvar a agenda: ${error.message}`); }
       else onSaveStatus("saved");
     });
-  }, [events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, planStartIso, agendaHydrated, profileId, onSaveStatus, setToast, onAgendaChange]);
+  }, [events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, planStartIso, lastAutoReprogramIso, agendaHydrated, profileId, onSaveStatus, setToast, onAgendaChange]);
 
-  const selectedTopicsThisWeek = (weekTopicChoices[String(weekOffset)] ?? (weekOffset === 0 ? weeklyTopics : [])).slice(0, 4);
+  const plannedTopicsThisWeek = events
+    .filter(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7)
+    .map(event => event.topic)
+    .filter((topic, index, list) => list.findIndex(item => topicKey(item) === topicKey(topic)) === index)
+    .slice(0, lessonsPerWeek);
+  const selectedTopicsThisWeek = (weekTopicChoices[String(weekOffset)] ?? (weekOffset === 0 ? weeklyTopics : []))
+    .filter((topic, index, list) => list.findIndex(item => topicKey(item) === topicKey(topic)) === index)
+    .slice(0, lessonsPerWeek);
+
+  function setVisibleWeekTopics(titles: string[], incomingTopic = "") {
+    const uniqueTitles = titles.filter((topic, index, list) => list.findIndex(item => topicKey(item) === topicKey(topic)) === index).slice(0, lessonsPerWeek);
+    setWeekTopicChoices(previous => {
+      const next = Object.fromEntries(Object.entries(previous).map(([week, topics]) => [week, incomingTopic ? topics.filter(topic => topicKey(topic) !== topicKey(incomingTopic)) : topics]));
+      next[String(weekOffset)] = uniqueTitles;
+      return next;
+    });
+    if (incomingTopic) setWeeklyTopics(previous => previous.filter(topic => topicKey(topic) !== topicKey(incomingTopic)));
+  }
 
   function addTopicToVisibleWeek() {
     if (weekOffset >= teachingWeeks) return setToast("Esta semana já pertence à cauda de consolidação. Você ainda pode adicionar qualquer bloco diretamente no calendário.");
     const normalized = weekTopicDraft.trim().toLocaleLowerCase("pt-BR");
     const matched = topicBank.find(topic => topic.title.toLocaleLowerCase("pt-BR") === normalized);
     if (!matched) return setToast("Escolha um assunto da lista cadastrada.");
-    if (selectedTopicsThisWeek.includes(matched.title)) return setToast("Esse assunto já está escolhido nesta semana.");
-    if (selectedTopicsThisWeek.length >= 4) return setToast("Esta semana já tem quatro assuntos escolhidos. Remova um deles antes de trocar.");
-    setWeekTopicChoices(previous => ({ ...previous, [String(weekOffset)]: [...selectedTopicsThisWeek, matched.title] }));
+    if (plannedTopicsThisWeek.some(topic => topicKey(topic) === topicKey(matched.title))) return setToast("Esse assunto já está nesta semana.");
+    if (plannedTopicsThisWeek.length >= lessonsPerWeek) {
+      setPendingReplacement(matched.title);
+      return setToast(`A semana já tem ${lessonsPerWeek} aulas. Escolha abaixo qual delas será substituída.`);
+    }
+    setVisibleWeekTopics([...plannedTopicsThisWeek, matched.title], matched.title);
     setWeekTopicDraft("");
-    setToast(`${matched.title} entrou somente na semana ${weekOffset + 1}. As outras aulas e semanas foram preservadas.`);
+    setToast(`${matched.title} entrou na semana ${weekOffset + 1}, sem ultrapassar a meta de ${lessonsPerWeek} aulas.`);
   }
 
   function removeTopicFromVisibleWeek(topic: string) {
@@ -1096,8 +1275,20 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     setToast(`${topic} foi retirado da semana ${weekOffset + 1}.`);
   }
 
+  function replaceTopicInVisibleWeek(outgoingTopic: string) {
+    if (!pendingReplacement) return;
+    const replacement = pendingReplacement;
+    const nextTopics = plannedTopicsThisWeek.map(topic => topicKey(topic) === topicKey(outgoingTopic) ? replacement : topic);
+    setVisibleWeekTopics(nextTopics, replacement);
+    setPendingReplacement("");
+    setWeekTopicDraft("");
+    setToast(`${replacement} substituiu ${outgoingTopic}. A aula retirada voltou para a fila e será reprogramada em outra semana.`);
+  }
+
   function moveEvent(id: number, day: number) {
     if (day < currentDayIndex) return setToast("O GPS não move tarefas para antes de hoje.");
+    const moving = events.find(event => event.id === id);
+    if (moving && events.some(event => event.id !== id && event.day === day && event.type === moving.type && topicKey(event.topic) === topicKey(moving.topic))) return setToast("Esse mesmo bloco já existe no dia escolhido.");
     setEvents(prev => prev.map(event => event.id === id ? { ...event, day, date: calendarDays[day]?.iso, customized: true } : event));
     setDragged(null);
     setToast(`Bloco movido para ${calendarDays[day]?.label ?? "o novo dia"}. A rota foi ajustada.`);
@@ -1105,6 +1296,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
 
   function saveBlock() {
     if (!newBlock.topic.trim()) return setToast("Digite o assunto do novo bloco.");
+    if (events.some(event => event.day === newBlock.day && event.type === newBlock.type && topicKey(event.topic) === topicKey(newBlock.topic))) return setToast("Esse mesmo bloco já está neste dia.");
     setEvents(prev => [...prev, { id: Date.now(), ...newBlock, date: calendarDays[newBlock.day]?.iso }]);
     setAddOpen(false);
     setNewBlock({ topic: "", day: Math.max(weekOffset * 7, currentDayIndex), meta: "2h", type: "theory" });
@@ -1113,6 +1305,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
 
   function saveEditedEvent() {
     if (!editingEvent?.topic.trim()) return setToast("Informe o assunto do bloco.");
+    if (events.some(event => event.id !== editingEvent.id && event.day === editingEvent.day && event.type === editingEvent.type && topicKey(event.topic) === topicKey(editingEvent.topic))) return setToast("Esse mesmo bloco já está neste dia.");
     setEvents(previous => previous.map(event => event.id === editingEvent.id ? { ...editingEvent, date: calendarDays[editingEvent.day]?.iso, customized: true } : event)); setEditingEvent(null); setToast("Bloco atualizado e salvo na sua agenda.");
   }
 
@@ -1142,7 +1335,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
 
   return <div className="page-stack">
     {focusArea && <section className="focus-banner"><div><span className="section-kicker">EIXO DA SEMANA · NÃO EXCLUSIVO</span><h2>{focusArea} · {focusPercentage}% da rota</h2><p>Os outros {100 - focusPercentage}% intercalam temas de outras áreas conforme as bancas. A sequência segue teoria → questões → revisão ativa.</p>{weeklyTopics.length > 0 && <small>Assuntos fixados por você: {weeklyTopics.join(" · ")}</small>}</div><span><Sparkles size={16} /> plano misto e editável</span></section>}
-    <section className="methodology-banner"><div><RefreshCw size={23} /><span><strong>Plano completo a partir de hoje + revisão que reage ao último resultado</strong><p>D1: 2 aulas · D2: 2 aulas e materiais · D3: 15 questões por aula. Depois: &lt;50% em 3d; 50–69% em 4d; ≥70% em 5d. Cada novo resultado reinicia a régua e, com estabilidade, os intervalos avançam até revisões mensais.</p></span></div><button className="outline-button" onClick={reprogramOverdue}><RefreshCw size={16} /> Reprogramar atrasos</button></section>
+    <section className="methodology-banner"><div><RefreshCw size={23} /><span><strong>Rota diária sincronizada · {lessonsPerWeek} aula{lessonsPerWeek > 1 ? "s" : ""} por semana</strong><p>Hoje é {new Date(`${todayIso}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}. Se houver pendências, o dia perdido ocupa hoje e toda a sequência seguinte avança junto — sem somar a carga de dois dias. Questões, flashcards e revisões espaçadas acompanham a nova rota.</p></span></div><button className="outline-button" onClick={() => reprogramOverdue(false)}><RefreshCw size={16} /> Verificar rota agora</button></section>
     <section className="rotation-banner">
       <div className="rotation-symbol"><Stethoscope size={23} /></div>
       <div className="rotation-copy"><span className="section-kicker">INTERNATO</span><h2>{rotation.area === "Nenhum rodízio cadastrado" ? rotation.area : `Rodízio de ${rotation.area}`}</h2><p>{rotation.area === "Nenhum rodízio cadastrado" ? "Informe sua área e o período para o GPS aproximar teoria e prática." : `Durante o período escolhido, ${rotation.boost}% da carga flexível será direcionada ao rodízio.`}</p></div>
@@ -1151,12 +1344,12 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     </section>
 
     <section className="panel week-topic-editor">
-      <div><span className="section-kicker">ESCOLHAS DA SEMANA {weekOffset + 1}</span><h2>{weekOffset < teachingWeeks ? "Escolha até 4 assuntos" : "Cauda de consolidação"}</h2><p>{weekOffset < teachingWeeks ? "Você pode trocar facilmente as aulas desta semana. As vagas restantes continuam automáticas e todo o banco permanece distribuído no calendário." : "Após a cobertura de todos os assuntos, permanecem revisões espaçadas, flashcards, provas e correções."}</p></div>
-      {weekOffset < teachingWeeks && <div className="week-topic-controls"><div><input list="week-topic-options" value={weekTopicDraft} onChange={event => setWeekTopicDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addTopicToVisibleWeek(); }} placeholder="Busque um assunto" /><datalist id="week-topic-options">{topicBank.map(topic => <option key={topic.id} value={topic.title}>{topic.area}</option>)}</datalist><button onClick={addTopicToVisibleWeek}><Plus size={15} /> Incluir nesta semana</button></div><div className="weekly-topic-chips">{selectedTopicsThisWeek.length ? selectedTopicsThisWeek.map(topic => <span key={topic}>{topic}<button onClick={() => removeTopicFromVisibleWeek(topic)} aria-label={`Remover ${topic}`}><X size={13} /></button></span>) : <small>Nenhum assunto fixado; as 4 aulas serão automáticas.</small>}</div></div>}
+      <div><span className="section-kicker">ESCOLHAS DA SEMANA {weekOffset + 1}</span><h2>{weekOffset < teachingWeeks ? `${plannedTopicsThisWeek.length} de ${lessonsPerWeek} aulas programadas` : "Cauda de consolidação"}</h2><p>{weekOffset < teachingWeeks ? `A meta automática é sempre ${lessonsPerWeek}. Se a semana estiver cheia, incluir um assunto abre a troca; a aula retirada é reprogramada mais adiante. Aulas extras só entram pelo botão “Adicionar bloco”.` : "Após a cobertura de todos os assuntos, permanecem revisões espaçadas, flashcards, provas e correções."}</p></div>
+      {weekOffset < teachingWeeks && <div className="week-topic-controls"><div><input list="week-topic-options" value={weekTopicDraft} onChange={event => { setWeekTopicDraft(event.target.value); setPendingReplacement(""); }} onKeyDown={event => { if (event.key === "Enter") addTopicToVisibleWeek(); }} placeholder="Busque um assunto" /><datalist id="week-topic-options">{planningTopics.map(topic => <option key={topic.id} value={topic.title}>{topic.area}</option>)}</datalist><button onClick={addTopicToVisibleWeek}><Plus size={15} /> {plannedTopicsThisWeek.length >= lessonsPerWeek ? "Trocar assunto" : "Incluir nesta semana"}</button></div>{pendingReplacement && <div className="replacement-guide"><strong>Qual aula deseja substituir por “{pendingReplacement}”?</strong><small>A escolhida não será perdida: ela voltará automaticamente em uma semana futura.</small></div>}<div className={`weekly-topic-chips ${pendingReplacement ? "replacement-active" : ""}`}>{plannedTopicsThisWeek.length ? plannedTopicsThisWeek.map(topic => <span key={topic}>{topic}{pendingReplacement ? <button onClick={() => replaceTopicInVisibleWeek(topic)} aria-label={`Substituir ${topic}`}>Substituir</button> : selectedTopicsThisWeek.some(item => topicKey(item) === topicKey(topic)) ? <button onClick={() => removeTopicFromVisibleWeek(topic)} aria-label={`Liberar ${topic}`}><X size={13} /></button> : null}</span>) : <small>As {lessonsPerWeek} aulas serão preenchidas automaticamente.</small>}</div>{pendingReplacement && <button className="cancel-replacement" onClick={() => setPendingReplacement("")}>Cancelar troca</button>}</div>}
     </section>
 
     <section className="panel agenda-panel">
-      <div className="agenda-toolbar"><div><h2>Semana {weekOffset + 1} de {calendarWeeks} · {visibleDays[0]?.number} {visibleDays[0]?.month} a {visibleDays[6]?.number} {visibleDays[6]?.month}</h2><p>{weekOffset === 0 ? "A geração começa no primeiro dia do plano; os dias anteriores ficam vazios." : "Ordem lógica por aprendizagem. Arraste, edite, exclua ou acrescente qualquer assunto."}</p></div><div><button className="week-arrow" disabled={weekOffset === 0} onClick={() => setWeekOffset(value => Math.max(0, value - 1))} aria-label="Semana anterior"><ChevronRight size={17} /></button><button className="week-arrow next" disabled={weekOffset === calendarWeeks - 1} onClick={() => setWeekOffset(value => Math.min(calendarWeeks - 1, value + 1))} aria-label="Próxima semana"><ChevronRight size={17} /></button><button className="primary-button" onClick={() => { setNewBlock(previous => ({ ...previous, day: Math.max(weekOffset * 7, currentDayIndex) })); setAddOpen(true); }}><Plus size={16} /> Adicionar bloco</button></div></div>
+      <div className="agenda-toolbar"><div><h2>Semana {weekOffset + 1} de {calendarWeeks} · {visibleDays[0]?.number} {visibleDays[0]?.month} a {visibleDays[6]?.number} {visibleDays[6]?.month}</h2><p>{weekOffset === Math.floor(currentDayIndex / 7) ? "Você está na semana atual. O dia de hoje é destacado e a rota é verificada diariamente." : "Você está consultando outra semana. Use “Ir para hoje” para voltar à rota atual."}</p></div><div><button className="today-route-button" onClick={() => setWeekOffset(Math.min(calendarWeeks - 1, Math.floor(currentDayIndex / 7)))}><CalendarClock size={15} /> Ir para hoje</button><button className="week-arrow" disabled={weekOffset === 0} onClick={() => setWeekOffset(value => Math.max(0, value - 1))} aria-label="Semana anterior"><ChevronRight size={17} /></button><button className="week-arrow next" disabled={weekOffset === calendarWeeks - 1} onClick={() => setWeekOffset(value => Math.min(calendarWeeks - 1, value + 1))} aria-label="Próxima semana"><ChevronRight size={17} /></button><button className="primary-button" onClick={() => { setNewBlock(previous => ({ ...previous, day: Math.max(weekOffset * 7, currentDayIndex) })); setAddOpen(true); }}><Plus size={16} /> Adicionar bloco</button></div></div>
       <div className="interactive-week">
         {visibleDays.map(day => <div className={`day-column ${day.iso === todayIso ? "today" : ""} ${day.absolute < currentDayIndex ? "past" : ""}`} key={day.iso} onDragOver={event => event.preventDefault()} onDrop={() => dragged && moveEvent(dragged, day.absolute)}>
           <header><span>{day.label}</span><strong>{day.number}</strong>{day.iso === todayIso && <b>HOJE</b>}</header>
@@ -1173,7 +1366,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       </div>
     </section>
 
-    <div className="three-cards"><MetricCard icon={<Gauge />} label="Aulas da semana" value={String(events.filter(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7).length)} note="meta de 4 · cerca de 2h cada" /><MetricCard icon={<LibraryBig />} label="Cobertura planejada" value={`${topicBank.length} assuntos`} note={`${teachingWeeks} semanas de aulas + consolidação`} /><MetricCard icon={<Layers3 />} label="Flashcards" value="todos os dias" note={`${Math.max(10, dailyCards)} cards vencidos e novos`} /></div>
+    <div className="three-cards"><MetricCard icon={<Gauge />} label="Aulas da semana" value={String(events.filter(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7).length)} note={`meta automática de ${lessonsPerWeek} · extras só manuais`} /><MetricCard icon={<LibraryBig />} label="Cobertura planejada" value={`${planningTopics.length} assuntos únicos`} note={`${teachingWeeks} semanas de aulas + consolidação`} /><MetricCard icon={<Layers3 />} label="Flashcards" value="todos os dias" note={`${Math.max(10, dailyCards)} cards vencidos e novos`} /></div>
 
     {rotationOpen && <div className="modal-backdrop" onMouseDown={() => setRotationOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Editar rodízio" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">SINCRONIZAR INTERNATO</span><h2>Qual é seu rodízio atual?</h2><p>Ao aplicar, a grande área correspondente vira o foco da semana e os assuntos são ordenados pelas bancas.</p></div><button className="icon-button" onClick={() => setRotationOpen(false)}><X size={20} /></button></div><div className="rotation-form"><label>Área<select value={rotation.area} onChange={e => setRotation({ ...rotation, area: e.target.value })}><option>Nenhum rodízio cadastrado</option><option>Ginecologia e Obstetrícia</option><option>Clínica Médica</option><option>Cirurgia</option><option>Pediatria</option><option>Saúde Coletiva</option><option>Emergência</option></select></label><div className="two-fields"><label>Início<input type="date" value={rotation.start} onChange={e => setRotation({ ...rotation, start: e.target.value })} /></label><label>Fim<input type="date" value={rotation.end} onChange={e => setRotation({ ...rotation, end: e.target.value })} /></label></div><label className="range-label"><span><b>Quanto priorizar o rodízio?</b><strong>{rotation.boost}%</strong></span><input type="range" min="20" max="70" step="5" value={rotation.boost} onChange={e => setRotation({ ...rotation, boost: Number(e.target.value) })} /><small>O restante continua direcionado à incidência das suas bancas.</small></label></div><div className="modal-actions"><button className="text-button" onClick={() => setRotationOpen(false)}>Cancelar</button><button className="primary-button" onClick={applyRotation}><RefreshCw size={16} /> Aplicar à agenda</button></div></div></div>}
 
@@ -1194,6 +1387,8 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
   const [cardsHydrated, setCardsHydrated] = useState(false);
   const [customCards, setCustomCards] = useState<CustomFlashcard[]>([]);
   const [selectedCardTopics, setSelectedCardTopics] = useState<string[]>([]);
+  const [deckMode, setDeckMode] = useState<"mix" | "topic">("mix");
+  const [focusedCardTopic, setFocusedCardTopic] = useState("");
   const [examDeckEnabled, setExamDeckEnabled] = useState(true);
   const [topicDraft, setTopicDraft] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -1205,7 +1400,7 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
   const weakTopics = logs.filter(log => log.accuracy < 75).map(log => log.topic);
   const examErrors = exams.flatMap(exam => exam.errors);
   const errorTopics = examErrors.map(error => error.topic);
-  const chosenTitles = [...new Set([...studiedTitles, ...selectedCardTopics, ...weakTopics, ...errorTopics])];
+  const chosenTitles = [...new Set([...studiedTitles, ...selectedCardTopics, ...weakTopics, ...errorTopics, ...(focusedCardTopic ? [focusedCardTopic] : [])])];
   const preparedCards = medicalCardDeck.filter(card => chosenTitles.includes(card.topic) && !("examFocused" in card));
   const errorCards = examErrors.map(error => ({ topic: error.topic, area: error.area, front: `Erro de simulado: ${error.note}`, back: error.correction }));
   const generatedCards = topicBank.filter(topic => chosenTitles.includes(topic.title) && !medicalCardDeck.some(card => card.topic === topic.title)).map(topic => ({ topic: topic.title, area: topic.area, front: `Quais são os pontos essenciais para dominar ${topic.title}?`, back: "Revise definição, classificação, apresentação clínica, diagnóstico, conduta, complicações e os principais diferenciais cobrados em prova." }));
@@ -1218,11 +1413,12 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
     }, 0);
     return examFocusedCardDeck.slice().sort((a, b) => topicScore(b.topic) - topicScore(a.topic));
   }, [banks, examDeckEnabled, selectedBankWeight]);
-  const activeDeck = [...customCards, ...errorCards, ...preparedCards, ...generatedCards, ...examQueueCards];
+  const mixedDeck = [...customCards, ...errorCards, ...preparedCards, ...generatedCards, ...examQueueCards];
+  const activeDeck = deckMode === "topic" ? mixedDeck.filter(card => card.topic.toLocaleLowerCase("pt-BR") === focusedCardTopic.toLocaleLowerCase("pt-BR")) : mixedDeck;
   const flashcardToday = localDateIso();
   const cardKey = (candidate: (typeof activeDeck)[number]) => "id" in candidate && candidate.id !== undefined ? `id:${candidate.id}` : `text:${candidate.area}|${candidate.topic}|${candidate.front}`;
   const dueDeck = activeDeck.filter(candidate => !cardSchedule[cardKey(candidate)] || cardSchedule[cardKey(candidate)].due <= flashcardToday).sort((a, b) => (cardSchedule[cardKey(a)]?.due ?? "9999").localeCompare(cardSchedule[cardKey(b)]?.due ?? "9999"));
-  const sessionGoal = dueDeck.length ? Math.min(45, Math.max(10, dailyCards, customCards.length + examErrors.length * 2 + selectedCardTopics.length * 3)) : 0;
+  const sessionGoal = dueDeck.length ? Math.min(45, Math.max(10, dailyCards, deckMode === "topic" ? dueDeck.length : customCards.length + examErrors.length * 2 + selectedCardTopics.length * 3)) : 0;
   const card = dueDeck[current % Math.max(1, dueDeck.length)];
   const progress = sessionGoal ? Math.min(100, Math.round((answered / sessionGoal) * 100)) : 0;
 
@@ -1232,13 +1428,13 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
       const loadCards = async () => {
         const result = await supabase?.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "flashcards").maybeSingle();
         const localKey = `gps-flashcards-state-${profileId}`;
-        let localData: { current?: number; answered?: number; xp?: number; sessionDate?: string; cardSchedule?: Record<string, CardSchedule>; customCards?: CustomFlashcard[]; selectedCardTopics?: string[]; examDeckEnabled?: boolean } | null = null;
+        let localData: { current?: number; answered?: number; xp?: number; sessionDate?: string; cardSchedule?: Record<string, CardSchedule>; customCards?: CustomFlashcard[]; selectedCardTopics?: string[]; deckMode?: "mix" | "topic"; focusedCardTopic?: string; examDeckEnabled?: boolean } | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
         const parsed = (result?.data?.data as typeof localData) ?? localData;
         if (parsed) {
           setCurrent(parsed.current ?? 0); setAnswered(parsed.sessionDate === flashcardToday ? parsed.answered ?? 0 : 0); setXp(parsed.xp ?? 0); setSessionDate(flashcardToday); setCardSchedule(parsed.cardSchedule ?? {});
-          setCustomCards(parsed.customCards ?? []); setSelectedCardTopics(parsed.selectedCardTopics ?? []); setExamDeckEnabled(parsed.examDeckEnabled ?? true);
-        } else { setCurrent(0); setAnswered(0); setXp(0); setSessionDate(flashcardToday); setCardSchedule({}); setCustomCards([]); setSelectedCardTopics([]); setExamDeckEnabled(true); }
+          setCustomCards(parsed.customCards ?? []); setSelectedCardTopics(parsed.selectedCardTopics ?? []); setDeckMode(parsed.deckMode ?? "mix"); setFocusedCardTopic(parsed.focusedCardTopic ?? ""); setExamDeckEnabled(parsed.examDeckEnabled ?? true);
+        } else { setCurrent(0); setAnswered(0); setXp(0); setSessionDate(flashcardToday); setCardSchedule({}); setCustomCards([]); setSelectedCardTopics([]); setDeckMode("mix"); setFocusedCardTopic(""); setExamDeckEnabled(true); }
         setCardsHydrated(true);
       };
       loadCards();
@@ -1249,7 +1445,7 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
   useEffect(() => {
     if (!cardsHydrated || !supabase || profileId === "joao") return;
     const client = supabase;
-    const state = { current, answered, xp, sessionDate, cardSchedule, customCards, selectedCardTopics, examDeckEnabled };
+    const state = { current, answered, xp, sessionDate, cardSchedule, customCards, selectedCardTopics, deckMode, focusedCardTopic, examDeckEnabled };
     localStorage.setItem(`gps-flashcards-state-${profileId}`, JSON.stringify(state));
     onSaveStatus("saving");
     cardsSaveQueue.current = cardsSaveQueue.current.then(async () => {
@@ -1257,7 +1453,7 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
       if (error) { onSaveStatus("error"); setToast(`Falha ao salvar flashcards: ${error.message}`); }
       else onSaveStatus("saved");
     });
-  }, [current, answered, xp, sessionDate, cardSchedule, customCards, selectedCardTopics, examDeckEnabled, cardsHydrated, profileId, onSaveStatus, setToast]);
+  }, [current, answered, xp, sessionDate, cardSchedule, customCards, selectedCardTopics, deckMode, focusedCardTopic, examDeckEnabled, cardsHydrated, profileId, onSaveStatus, setToast]);
 
   function rate(label: string, points: number) {
     if (!card) return;
@@ -1274,9 +1470,19 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
 
   function chooseTopic() {
     const topic = topicDraft.trim();
-    if (!topic) return setToast("Escolha um assunto para a fila diária.");
-    if (selectedCardTopics.includes(topic)) return setToast("Esse assunto já está na fila de flashcards.");
-    setSelectedCardTopics(previous => [...previous, topic]); setTopicDraft(""); setToast(`${topic} foi incluído na fila diária, independentemente do cronograma.`);
+    const matched = topicBank.find(item => item.title.toLocaleLowerCase("pt-BR") === topic.toLocaleLowerCase("pt-BR"));
+    if (!matched) return setToast("Escolha um assunto cadastrado na lista.");
+    if (deckMode === "topic") {
+      setFocusedCardTopic(matched.title); setCurrent(0); setAnswered(0); setRevealed(false); setTopicDraft("");
+      return setToast(`Sessão exclusiva de ${matched.title} pronta.`);
+    }
+    if (selectedCardTopics.some(item => item.toLocaleLowerCase("pt-BR") === matched.title.toLocaleLowerCase("pt-BR"))) return setToast("Esse assunto já está na fila de flashcards.");
+    setSelectedCardTopics(previous => [...previous, matched.title]); setTopicDraft(""); setToast(`${matched.title} foi incluído no mix diário, independentemente do cronograma.`);
+  }
+
+  function changeDeckMode(mode: "mix" | "topic") {
+    setDeckMode(mode); setCurrent(0); setAnswered(0); setRevealed(false); setLastRating(""); setTopicDraft("");
+    setToast(mode === "mix" ? "Mix inteligente ativado: erros, revisões e assuntos escolhidos juntos." : "Modo por assunto ativado. Escolha um tema para estudar sem mistura.");
   }
 
   function createCard() {
@@ -1301,11 +1507,13 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
 
   return <div className="page-stack">
     <section className="cards-hero">
-      <div><span className="cards-level"><Zap size={14} fill="currentColor" /> NÍVEL 1 · {xp} XP</span><h2>Flashcards todos os dias, do seu jeito.</h2><p>A fila mistura seus erros, assuntos escolhidos, conteúdos estudados e cards criados por você — sem depender do foco do cronograma.</p>{sessionGoal > 0 && <div className="daily-progress"><div><i style={{ width: `${progress}%` }} /></div><span><b>{answered}</b> de {sessionGoal} concluídos</span></div>}<div className="card-hero-actions"><button className="primary-button" onClick={() => setCreateOpen(true)}><Plus size={16} /> Criar flashcard</button><button className="outline-button" onClick={onOpenTopics}><LibraryBig size={16} /> Ver assuntos</button></div></div>
+      <div><span className="cards-level"><Zap size={14} fill="currentColor" /> NÍVEL 1 · {xp} XP</span><h2>{deckMode === "topic" && focusedCardTopic ? `Flashcards de ${focusedCardTopic}` : "Flashcards todos os dias, do seu jeito."}</h2><p>{deckMode === "topic" ? focusedCardTopic ? "Nesta sessão aparecem somente cartões deste assunto, mantendo a repetição espaçada individual de cada card." : "Escolha um assunto abaixo para iniciar uma sessão exclusiva, sem misturar outros temas." : "O mix reúne seus erros, assuntos escolhidos, conteúdos estudados e cards criados por você — sem depender do foco do cronograma."}</p>{sessionGoal > 0 && <div className="daily-progress"><div><i style={{ width: `${progress}%` }} /></div><span><b>{answered}</b> de {sessionGoal} concluídos</span></div>}<div className="card-hero-actions"><button className="primary-button" onClick={() => setCreateOpen(true)}><Plus size={16} /> Criar flashcard</button><button className="outline-button" onClick={onOpenTopics}><LibraryBig size={16} /> Ver assuntos</button></div></div>
       <div className="streak-orbit"><FlameIcon /><strong>0</strong><span>dias seguidos</span></div>
     </section>
 
-    <section className="panel card-choice-panel"><div><h2>Escolha qualquer assunto para a fila</h2><p>Ele não precisa estar na agenda nem ser o foco da semana.</p></div><div><input list="card-topic-options" value={topicDraft} onChange={event => setTopicDraft(event.target.value)} placeholder="Digite ou escolha um assunto" onKeyDown={event => { if (event.key === "Enter") chooseTopic(); }} /><datalist id="card-topic-options">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist><button onClick={chooseTopic}><Plus size={16} /> Adicionar</button></div>{selectedCardTopics.length > 0 && <div className="weekly-topic-chips">{selectedCardTopics.map(topic => <span key={topic}>{topic}<button onClick={() => setSelectedCardTopics(previous => previous.filter(item => item !== topic))}><X size={13} /></button></span>)}</div>}</section>
+    <section className="panel deck-mode-panel"><div><span className="section-kicker">MODO DA SESSÃO</span><h2>Como você quer revisar agora?</h2><p>A repetição espaçada continua ativa nos dois modos.</p></div><div className="deck-mode-buttons"><button className={deckMode === "mix" ? "active" : ""} onClick={() => changeDeckMode("mix")}><Layers3 size={18} /><span><strong>Mix inteligente</strong><small>Erros, prioridades e revisões juntos</small></span></button><button className={deckMode === "topic" ? "active" : ""} onClick={() => changeDeckMode("topic")}><Target size={18} /><span><strong>Assunto específico</strong><small>Somente o tema que você escolher</small></span></button></div></section>
+
+    <section className="panel card-choice-panel"><div><h2>{deckMode === "topic" ? "Escolha o assunto da sessão" : "Adicione assuntos ao mix"}</h2><p>{deckMode === "topic" ? "A fila ficará exclusiva para esse tema." : "Eles ganham espaço no mix mesmo fora do cronograma."}</p></div><div><input list="card-topic-options" value={topicDraft} onChange={event => setTopicDraft(event.target.value)} placeholder="Digite ou escolha um assunto" onKeyDown={event => { if (event.key === "Enter") chooseTopic(); }} /><datalist id="card-topic-options">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist><button onClick={chooseTopic}>{deckMode === "topic" ? <Target size={16} /> : <Plus size={16} />} {deckMode === "topic" ? "Estudar este assunto" : "Adicionar ao mix"}</button></div>{deckMode === "topic" && focusedCardTopic ? <div className="focused-topic-session"><Target size={15} /><span><small>SESSÃO ATUAL</small><strong>{focusedCardTopic}</strong></span><button onClick={() => { setFocusedCardTopic(""); setCurrent(0); setAnswered(0); }}>Trocar</button></div> : deckMode === "mix" && selectedCardTopics.length > 0 ? <div className="weekly-topic-chips">{selectedCardTopics.map(topic => <span key={topic}>{topic}<button onClick={() => setSelectedCardTopics(previous => previous.filter(item => item !== topic))}><X size={13} /></button></span>)}</div> : null}</section>
 
     <section className={`panel unified-deck-panel ${examDeckEnabled ? "enabled" : ""}`}>
       <div className="unified-deck-icon"><BrainCircuit size={23} /></div>
@@ -1322,8 +1530,8 @@ function FlashcardsPage({ logs, exams, banks, dailyCards, setToast, profileId, s
         {!revealed ? <button className="reveal-button" onClick={() => setRevealed(true)}><Sparkles size={17} /> Mostrar resposta</button> : <div className="rating-area"><p>Como foi lembrar deste conteúdo?</p><div><button className="hard" onClick={() => rate("Difícil", 12)}><Frown size={20} /><span><b>Difícil</b><small>rever em 1 dia</small></span></button><button className="medium" onClick={() => rate("Médio", 18)}><Meh size={20} /><span><b>Médio</b><small>rever em 3 dias</small></span></button><button className="easy" onClick={() => rate("Fácil", 24)}><Smile size={20} /><span><b>Fácil</b><small>rever em 6 dias</small></span></button></div></div>}
         {lastRating && <div className="micro-reward"><Zap size={14} /> Último card: {lastRating}. O intervalo já foi recalculado.</div>}
       </div>
-      <aside className="cards-sidebar"><div className="panel"><div className="panel-title"><div><h2>Origem da fila</h2><p>O GPS aumenta a repetição quando encontra erros.</p></div></div><div className="queue-sources"><span><b>{dueDeck.length}</b> cards vencidos ou novos</span><span><b>{examErrors.length}</b> erros de simulados</span><span><b>{customCards.length}</b> cards criados por você</span><span><b>{selectedCardTopics.length}</b> assuntos escolhidos</span><span><b>{examDeckEnabled ? examFocusedCardDeck.length : 0}</b> cards estilo prova</span></div><div className="recommend-list">{topicRecommendations.map(item => <article key={item.id}><div><strong>{item.topic}</strong><span>{item.questions} questões · {item.accuracy}% de acerto</span></div><b>{item.cards}<small> cards</small></b></article>)}</div></div><div className="panel interval-legend"><h2>Repetição adaptativa</h2><p><span className="dot hard" /> Difícil: 1 dia e encurta a progressão</p><p><span className="dot medium" /> Médio: 3 dias, depois amplia</p><p><span className="dot easy" /> Fácil: 6 dias, depois amplia até 30</p></div></aside>
-    </section> : <section className="fresh-empty hero-empty"><div className="fresh-empty-icon"><Layers3 size={30} /></div><h2>Sua fila está pronta para começar</h2><p>Escolha um assunto acima ou crie seu primeiro flashcard. Não é necessário alterar o cronograma.</p><button className="primary-button" onClick={() => setCreateOpen(true)}><Plus size={16} /> Criar primeiro flashcard</button></section>}
+      <aside className="cards-sidebar"><div className="panel"><div className="panel-title"><div><h2>Origem da fila</h2><p>{deckMode === "topic" ? `Somente ${focusedCardTopic}.` : "O GPS aumenta a repetição quando encontra erros."}</p></div></div><div className="queue-sources"><span><b>{deckMode === "topic" ? "1" : "Mix"}</b> modo da sessão</span><span><b>{dueDeck.length}</b> cards vencidos ou novos</span><span><b>{examErrors.length}</b> erros de simulados</span><span><b>{customCards.length}</b> cards criados por você</span><span><b>{selectedCardTopics.length}</b> assuntos no mix</span><span><b>{examDeckEnabled ? examFocusedCardDeck.length : 0}</b> cards estilo prova</span></div><div className="recommend-list">{topicRecommendations.map(item => <article key={item.id}><div><strong>{item.topic}</strong><span>{item.questions} questões · {item.accuracy}% de acerto</span></div><b>{item.cards}<small> cards</small></b></article>)}</div></div><div className="panel interval-legend"><h2>Repetição adaptativa</h2><p><span className="dot hard" /> Difícil: 1 dia e encurta a progressão</p><p><span className="dot medium" /> Médio: 3 dias, depois amplia</p><p><span className="dot easy" /> Fácil: 6 dias, depois amplia até 30</p></div></aside>
+    </section> : <section className="fresh-empty hero-empty"><div className="fresh-empty-icon"><Layers3 size={30} /></div><h2>{deckMode === "topic" && !focusedCardTopic ? "Escolha um assunto para começar" : "Nenhum card vencido agora"}</h2><p>{deckMode === "topic" && !focusedCardTopic ? "Use o campo acima para abrir uma sessão exclusiva. O mix continua salvo para quando você voltar." : "Você concluiu os cards disponíveis neste modo. As próximas revisões reaparecem conforme os intervalos espaçados."}</p><button className="primary-button" onClick={() => setCreateOpen(true)}><Plus size={16} /> Criar flashcard</button></section>}
 
     {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">FLASHCARD PERSONALIZADO</span><h2>{editingCardId !== null ? "Alterar flashcard" : "Criar novo flashcard"}</h2><p>O card entrará na fila diária mesmo que o assunto não esteja no cronograma.</p></div><button className="icon-button" onClick={() => { setCreateOpen(false); setEditingCardId(null); }}><X size={20} /></button></div><label className="plain-field">Assunto<input value={cardForm.topic} onChange={event => setCardForm({ ...cardForm, topic: event.target.value })} placeholder="Ex.: Insuficiência cardíaca" /></label><label className="plain-field">Grande área<select value={cardForm.area} onChange={event => setCardForm({ ...cardForm, area: event.target.value as StudyTopic["area"] })}>{STUDY_AREAS.map(area => <option key={area}>{area}</option>)}</select></label><label className="plain-field">Pergunta<textarea value={cardForm.front} onChange={event => setCardForm({ ...cardForm, front: event.target.value })} placeholder="O que eu quero lembrar?" /></label><label className="plain-field">Resposta<textarea value={cardForm.back} onChange={event => setCardForm({ ...cardForm, back: event.target.value })} placeholder="Resposta curta e objetiva" /></label><div className="modal-actions"><button className="text-button" onClick={() => { setCreateOpen(false); setEditingCardId(null); }}>Cancelar</button><button className="primary-button" onClick={createCard}><Check size={16} /> {editingCardId !== null ? "Salvar alteração" : "Salvar flashcard"}</button></div></div></div>}
   </div>;
@@ -1372,7 +1580,7 @@ function QuestionsPage({ logs, setLogs, setToast, setStudiedTopics }: { logs: Qu
   </div>;
 }
 
-function TopicsPage({ studiedTopics, setStudiedTopics, setToast, focusArea, weeklyTopics, setWeeklyTopics }: { studiedTopics: string[]; setStudiedTopics: React.Dispatch<React.SetStateAction<string[]>>; setToast: (message: string) => void; focusArea: FocusArea; weeklyTopics: string[]; setWeeklyTopics: React.Dispatch<React.SetStateAction<string[]>> }) {
+function TopicsPage({ studiedTopics, setStudiedTopics, setToast, focusArea, weeklyTopics, setWeeklyTopics, lessonGoal }: { studiedTopics: string[]; setStudiedTopics: React.Dispatch<React.SetStateAction<string[]>>; setToast: (message: string) => void; focusArea: FocusArea; weeklyTopics: string[]; setWeeklyTopics: React.Dispatch<React.SetStateAction<string[]>>; lessonGoal: number }) {
   const [search, setSearch] = useState("");
   const [area, setArea] = useState<"Todas" | StudyTopic["area"]>("Todas");
   const areas: Array<"Todas" | StudyTopic["area"]> = ["Todas", "Cirurgia", "Ginecologia e Obstetrícia", "Clínica Médica", "Pediatria", "Preventiva"];
@@ -1386,9 +1594,10 @@ function TopicsPage({ studiedTopics, setStudiedTopics, setToast, focusArea, week
   }
 
   function toggleWeeklyTopic(topic: StudyTopic) {
-    const selected = weeklyTopics.includes(topic.title);
+    const selected = weeklyTopics.some(title => title.toLocaleLowerCase("pt-BR") === topic.title.toLocaleLowerCase("pt-BR"));
+    if (!selected && weeklyTopics.length >= lessonGoal) return setToast(`Sua semana já tem ${lessonGoal} aulas. Abra “Meu plano” para substituir uma delas; o tema retirado será reprogramado.`);
     setWeeklyTopics(previous => selected ? previous.filter(title => title !== topic.title) : [...previous, topic.title]);
-    setToast(selected ? `${topic.title} foi retirado desta semana.` : `${topic.title} foi incluído como complemento da semana.`);
+    setToast(selected ? `${topic.title} foi retirado desta semana.` : `${topic.title} foi incluído sem ultrapassar a meta de ${lessonGoal} aulas.`);
   }
 
   return <div className="page-stack">
