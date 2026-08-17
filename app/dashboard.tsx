@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -103,6 +103,9 @@ type AgendaEvent = {
   id: number;
   day: number;
   date?: string;
+  lessonId?: string;
+  revisionStage?: number;
+  source?: "generated" | "manual";
   topic: string;
   meta: string;
   type: "rotation" | "questions" | "review" | "cards" | "theory" | "materials" | "mock" | "correction";
@@ -110,9 +113,16 @@ type AgendaEvent = {
   studied?: boolean;
   customized?: boolean;
   autoReprogrammedAt?: string;
-  sourceKey?: string;
-  lessonKey?: string;
 };
+
+function stableAgendaId(key: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return 100000000 + (hash >>> 0) % 800000000;
+}
 
 type AgendaReprogramResult = {
   events: AgendaEvent[];
@@ -120,18 +130,6 @@ type AgendaReprogramResult = {
   shiftedCount: number;
   delayDays: number;
 };
-
-function inferAgendaIdentity(event: AgendaEvent) {
-  if (event.sourceKey || event.lessonKey || event.id < 81000 || event.id >= 90000) return event;
-  const normalizedTopic = event.topic.trim().toLocaleLowerCase("pt-BR");
-  if (["theory", "questions", "review"].includes(event.type)) {
-    const lessonKey = `lesson:${normalizedTopic}`;
-    const reviewStage = event.type === "review" ? event.meta.match(/Revisão\s+(\d+)/i)?.[1] ?? String(event.id) : "";
-    return { ...event, lessonKey, sourceKey: event.type === "review" ? `${lessonKey}:review:${reviewStage}` : `${lessonKey}:${event.type}` };
-  }
-  if (event.type === "cards") return { ...event, sourceKey: `cards:${event.date ?? event.day}` };
-  return { ...event, sourceKey: `generated:${event.id}` };
-}
 
 function addDaysToIso(iso: string, days: number) {
   const date = new Date(`${iso}T12:00:00`);
@@ -149,7 +147,7 @@ function dateForAgendaDay(planStartIso: string, day: number) {
   return localDateIso(start);
 }
 
-function reprogramAgendaWithoutOverload(items: AgendaEvent[], todayIso: string, currentDayIndex?: number, suppressedSourceKeys: string[] = []): AgendaReprogramResult {
+function reprogramAgendaWithoutOverload(items: AgendaEvent[], todayIso: string, currentDayIndex?: number): AgendaReprogramResult {
   const isPast = (event: AgendaEvent) => event.date ? event.date < todayIso : currentDayIndex !== undefined && event.day < currentDayIndex;
   const ensureDailyCards = (events: AgendaEvent[]) => {
     const cardTemplate = events.find(event => event.type === "cards");
@@ -157,13 +155,10 @@ function reprogramAgendaWithoutOverload(items: AgendaEvent[], todayIso: string, 
     if (!cardTemplate || todayDay === undefined) return events;
     const lastRouteDay = events.filter(event => event.type !== "cards").reduce((maximum, event) => Math.max(maximum, event.day), todayDay);
     const existingCardDays = new Set(events.filter(event => event.type === "cards").map(event => event.day));
-    const customizedCardOrigins = new Set(events.filter(event => event.type === "cards" && event.customized && event.sourceKey).map(event => event.sourceKey));
     const extraCards: AgendaEvent[] = [];
     for (let day = todayDay; day <= lastRouteDay; day += 1) {
-      const date = addDaysToIso(todayIso, day - todayDay);
-      const sourceKey = `cards:${date}`;
-      if (existingCardDays.has(day) || suppressedSourceKeys.includes(sourceKey) || customizedCardOrigins.has(sourceKey)) continue;
-      extraCards.push({ ...cardTemplate, id: 86000 + day, day, date, completed: false, studied: false, autoReprogrammedAt: todayIso, sourceKey: `cards:${date}` });
+      if (existingCardDays.has(day)) continue;
+      extraCards.push({ ...cardTemplate, id: 86000 + day, day, date: addDaysToIso(todayIso, day - todayDay), completed: false, studied: false, autoReprogrammedAt: todayIso });
     }
     return [...events, ...extraCards];
   };
@@ -538,13 +533,13 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
         const result = await supabase?.from("profile_states").select("data").eq("profile_id", requestedProfileId).eq("scope", "agenda").maybeSingle();
         if (cancelled) return;
         const localKey = `gps-agenda-state-${requestedProfileId}`;
-        let localData: { events?: AgendaEvent[]; rotation?: RotationState; suggestionKey?: string; weekTopicChoices?: Record<string, string[]>; deletedGeneratedIds?: number[]; deletedGeneratedKeys?: string[]; planStartIso?: string; lastAutoReprogramIso?: string } | null = null;
+        let localData: { events?: AgendaEvent[]; rotation?: RotationState; suggestionKey?: string; weekTopicChoices?: Record<string, string[]>; deletedGeneratedIds?: number[]; planStartIso?: string; lastAutoReprogramIso?: string } | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
         const parsed = (result?.data?.data as typeof localData) ?? localData;
-        let previewEvents = (parsed?.events ?? []).map(event => inferAgendaIdentity(event.date || !parsed?.planStartIso ? event : { ...event, date: dateForAgendaDay(parsed.planStartIso, event.day) }));
+        let previewEvents = (parsed?.events ?? []).map(event => event.date || !parsed?.planStartIso ? event : { ...event, date: dateForAgendaDay(parsed.planStartIso, event.day) });
         let lastAutoReprogramIso = parsed?.lastAutoReprogramIso ?? "";
         if (lastAutoReprogramIso !== appTodayIso && previewEvents.length) {
-          const reprogrammed = reprogramAgendaWithoutOverload(previewEvents, appTodayIso, undefined, parsed?.deletedGeneratedKeys ?? []);
+          const reprogrammed = reprogramAgendaWithoutOverload(previewEvents, appTodayIso);
           previewEvents = reprogrammed.events;
           lastAutoReprogramIso = appTodayIso;
           const updatedState = { ...(parsed ?? {}), events: previewEvents, lastAutoReprogramIso };
@@ -1037,18 +1032,14 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   const [weekOffset, setWeekOffset] = useState(0);
   const visibleDays = calendarDays.slice(weekOffset * 7, weekOffset * 7 + 7);
   const [dragged, setDragged] = useState<number | null>(null);
-  const [dragOverDay, setDragOverDay] = useState<number | null>(null);
-  const touchDrag = useRef<{ eventId: number; pointerId: number } | null>(null);
   const [rotationOpen, setRotationOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<AgendaEvent | null>(null);
-  const [editingIntent, setEditingIntent] = useState<"edit" | "move">("edit");
-  const [pendingDeleteEvent, setPendingDeleteEvent] = useState<AgendaEvent | null>(null);
   const [rotation, setRotation] = useState({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 });
   const [newBlock, setNewBlock] = useState({ topic: "", day: 0, meta: "2h", type: "theory" as AgendaEvent["type"] });
   const [weekTopicChoices, setWeekTopicChoices] = useState<Record<string, string[]>>({});
   const [deletedGeneratedIds, setDeletedGeneratedIds] = useState<number[]>([]);
-  const [deletedGeneratedKeys, setDeletedGeneratedKeys] = useState<string[]>([]);
+  const [excludedTopicKeys, setExcludedTopicKeys] = useState<string[]>([]);
   const [weekTopicDraft, setWeekTopicDraft] = useState("");
   const [pendingReplacement, setPendingReplacement] = useState("");
   const [agendaHydrated, setAgendaHydrated] = useState(false);
@@ -1060,6 +1051,35 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   const planningStartIndex = Math.max(0, calendarDays.findIndex(day => day.iso === planStartIso));
   const locatedCurrentDay = calendarDays.findIndex(day => day.iso === todayIso);
   const currentDayIndex = locatedCurrentDay >= 0 ? locatedCurrentDay : calendarLength - 1;
+
+  const buildLessonCycle = useCallback((topic: string, theoryDay: number, lessonId: string, source: "generated" | "manual", theoryMeta?: string) => {
+    const matchedTopic = planningTopics.find(item => topicKey(item.title) === topicKey(topic));
+    const logs = questionLogs.filter(log => topicKey(log.topic) === topicKey(topic)).slice().sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+    const latest = logs[0];
+    const previous = logs[1];
+    const accuracy = latest?.accuracy ?? 0;
+    const change = latest && previous ? latest.accuracy - previous.accuracy : 0;
+    const questionDay = theoryDay + 2;
+    const recordedIndex = latest?.date && /^\d{4}-\d{2}-\d{2}$/.test(latest.date) ? calendarDays.findIndex(day => day.iso === latest.date) : currentDayIndex;
+    const performanceDay = latest ? (recordedIndex >= planningStartIndex ? recordedIndex : currentDayIndex) : questionDay;
+    const trend = change <= -10 ? ` · queda de ${Math.abs(change)} pontos` : change >= 10 ? ` · melhora de ${change} pontos` : "";
+    const intervals = !latest ? [4, 7, 14, 30, 30, 30] : accuracy < 50 ? [3, 4, 7, 14, 30, 30, 30] : accuracy < 70 ? [4, 7, 14, 30, 30, 30] : [5, 10, 21, 30, 30, 30];
+    const questionVolumes = !latest ? [7, 6, 5, 4, 4, 4] : accuracy < 50 ? [10, 8, 7, 6, 5, 5, 5] : accuracy < 70 ? [8, 7, 6, 5, 4, 4] : [5, 5, 4, 4, 4, 4];
+    const idFor = (role: string) => stableAgendaId(`${lessonId}:${role}`);
+    const withDate = (event: AgendaEvent): AgendaEvent => ({ ...event, date: calendarDays[event.day]?.iso ?? dateForAgendaDay(planStartIso, event.day) });
+    const cycle: AgendaEvent[] = [
+      withDate({ id: idFor("theory"), lessonId, source, day: theoryDay, topic, meta: theoryMeta ?? `Aula completa · cerca de 2h · ${matchedTopic?.area ?? "conteúdo livre"}`, type: "theory" }),
+      withDate({ id: idFor("questions"), lessonId, source, day: questionDay, topic, meta: "Primeiro bloco · 15 questões da aula · corrigir e registrar o percentual", type: "questions" }),
+    ];
+    let reviewDay = latest ? performanceDay : questionDay;
+    intervals.forEach((interval, reviewIndex) => {
+      reviewDay += interval;
+      if (reviewDay < 0) return;
+      const stage = reviewIndex + 1;
+      cycle.push(withDate({ id: idFor(`review:${stage}`), lessonId, revisionStage: stage, source, day: reviewDay, topic, meta: `Revisão ${stage} · ${questionVolumes[reviewIndex]} questões curtas + flashcards · intervalo ${interval}d · último acerto ${latest ? `${accuracy}%${trend}` : "a medir no primeiro bloco"}`, type: "review" }));
+    });
+    return cycle;
+  }, [planningTopics, questionLogs, calendarDays, currentDayIndex, planningStartIndex, planStartIso]);
 
   useEffect(() => {
     const updateCalendarDay = () => setTodayIso(current => {
@@ -1074,8 +1094,9 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     if (!focusArea) return [];
     const rank = new Map(priorities.map(item => [item.topic, item.rank]));
     const byPriority = (a: StudyTopic, b: StudyTopic) => (rank.get(a.title) ?? 9999) - (rank.get(b.title) ?? 9999) || a.title.localeCompare(b.title, "pt-BR");
-    const focusPool = planningTopics.filter(topic => topic.area === focusArea).slice().sort(byPriority);
-    const mixedPool = planningTopics.filter(topic => topic.area !== focusArea).slice().sort(byPriority);
+    const availablePlanningTopics = planningTopics.filter(topic => !excludedTopicKeys.includes(topicKey(topic.title)));
+    const focusPool = availablePlanningTopics.filter(topic => topic.area === focusArea).slice().sort(byPriority);
+    const mixedPool = availablePlanningTopics.filter(topic => topic.area !== focusArea).slice().sort(byPriority);
     const orderedTopics: StudyTopic[] = [];
     let focusCursor = 0; let mixedCursor = 0;
     while (focusCursor < focusPool.length || mixedCursor < mixedPool.length) {
@@ -1090,7 +1111,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     for (let week = 0; week < teachingWeeks; week += 1) {
       const choices: string[] = [];
       for (const title of rawExplicit[String(week)] ?? []) {
-        const matched = planningTopics.find(topic => topicKey(topic.title) === topicKey(title));
+        const matched = availablePlanningTopics.find(topic => topicKey(topic.title) === topicKey(title));
         const key = matched ? topicKey(matched.title) : "";
         if (!matched || explicitlyScheduled.has(key) || choices.length >= lessonsPerWeek) continue;
         explicitlyScheduled.add(key);
@@ -1101,51 +1122,32 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     const remainingTopics = orderedTopics.filter(topic => !explicitlyScheduled.has(topicKey(topic.title)));
     const generated: AgendaEvent[] = [];
     const scheduledTopics = new Set<string>();
-    let eventId = 81000;
     let automaticCursor = 0;
     for (let week = 0; week < teachingWeeks; week += 1) {
       const base = planningStartIndex + week * 7;
       const chosenForWeek = (explicitByWeek[String(week)] ?? []).slice(0, lessonsPerWeek);
-      const weekLessons = chosenForWeek.map(title => planningTopics.find(topic => topicKey(topic.title) === topicKey(title))).filter((topic): topic is StudyTopic => Boolean(topic));
+      const weekLessons = chosenForWeek.map(title => availablePlanningTopics.find(topic => topicKey(topic.title) === topicKey(title))).filter((topic): topic is StudyTopic => Boolean(topic));
       while (weekLessons.length < lessonsPerWeek && automaticCursor < remainingTopics.length) {
         const candidate = remainingTopics[automaticCursor++];
         if (!scheduledTopics.has(topicKey(candidate.title))) weekLessons.push(candidate);
       }
       weekLessons.forEach((lesson, lessonIndex) => {
         const topic = lesson.title;
-        const lessonKey = `lesson:${topicKey(topic)}`;
+        const lessonId = `lesson:${topicKey(topic)}`;
         scheduledTopics.add(topicKey(topic));
         const priority = priorities.find(item => item.topic === topic);
         const firstDayCount = Math.ceil(lessonsPerWeek / 2);
         const theoryDay = base + (lessonIndex < firstDayCount ? 0 : 1);
-        const questionDay = base + 2;
-        generated.push({ id: eventId++, day: theoryDay, topic, meta: `Aula completa · cerca de 2h · ${lesson.area} · ${priority?.sourceBank ?? "sequência pedagógica"}`, type: "theory", lessonKey, sourceKey: `${lessonKey}:theory` });
-        generated.push({ id: eventId++, day: questionDay, topic, meta: "Primeiro bloco · 15 questões da aula · corrigir e registrar o percentual", type: "questions", lessonKey, sourceKey: `${lessonKey}:questions` });
-        const logs = questionLogs.filter(log => log.topic.toLocaleLowerCase("pt-BR") === topic.toLocaleLowerCase("pt-BR")).slice().sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
-        const latest = logs[0]; const previous = logs[1]; const accuracy = latest?.accuracy ?? 0;
-        const change = latest && previous ? latest.accuracy - previous.accuracy : 0;
-        const recordedIndex = latest?.date && /^\d{4}-\d{2}-\d{2}$/.test(latest.date) ? calendarDays.findIndex(day => day.iso === latest.date) : currentDayIndex;
-        const performanceDay = latest ? (recordedIndex >= planningStartIndex ? recordedIndex : currentDayIndex) : questionDay;
-        const reviewStart = latest ? performanceDay : questionDay;
-        const trend = change <= -10 ? ` · queda de ${Math.abs(change)} pontos` : change >= 10 ? ` · melhora de ${change} pontos` : "";
-        const intervals = !latest ? [4, 7, 14, 30, 30, 30] : accuracy < 50 ? [3, 4, 7, 14, 30, 30, 30] : accuracy < 70 ? [4, 7, 14, 30, 30, 30] : [5, 10, 21, 30, 30, 30];
-        const questionVolumes = !latest ? [7, 6, 5, 4, 4, 4] : accuracy < 50 ? [10, 8, 7, 6, 5, 5, 5] : accuracy < 70 ? [8, 7, 6, 5, 4, 4] : [5, 5, 4, 4, 4, 4];
-        let reviewDay = reviewStart;
-        intervals.forEach((interval, reviewIndex) => {
-          reviewDay += interval;
-          if (reviewDay < 0 || reviewDay >= generationLength) return;
-          const stage = reviewIndex + 1;
-          generated.push({ id: eventId++, day: reviewDay, topic, meta: `Revisão ${stage} · ${questionVolumes[reviewIndex]} questões curtas + flashcards · intervalo ${interval}d · último acerto ${latest ? `${accuracy}%${trend}` : "a medir no D3"}`, type: "review", lessonKey, sourceKey: `${lessonKey}:review:${stage}` });
-        });
+        generated.push(...buildLessonCycle(topic, theoryDay, lessonId, "generated", `Aula completa · cerca de 2h · ${lesson.area} · ${priority?.sourceBank ?? "sequência pedagógica"}`));
       });
-      generated.push({ id: eventId++, day: base + 1, topic: "Confecção e revisão de materiais", meta: `Organizar resumos, imagens, algoritmos e dúvidas das ${weekLessons.length} aulas · bloco livre e editável`, type: "materials", sourceKey: `week:${week}:materials` });
+      generated.push({ id: stableAgendaId(`materials:${week}`), source: "generated", day: base + 1, topic: "Confecção e revisão de materiais", meta: `Organizar resumos, imagens, algoritmos e dúvidas das ${weekLessons.length} aulas · bloco livre e editável`, type: "materials" });
     }
     const cardGoal = Math.max(10, dailyCards);
-    for (let day = planningStartIndex; day < generationLength; day += 1) generated.push({ id: 86000 + day, day, topic: "Fila diária adaptativa", meta: `${cardGoal} flashcards vencidos + novos · intervalo individual`, type: "cards", sourceKey: `cards:${calendarDays[day]?.iso ?? day}` });
+    for (let day = planningStartIndex; day < generationLength; day += 1) generated.push({ id: stableAgendaId(`cards:${calendarDays[day]?.iso ?? day}`), source: "generated", day, topic: "Fila diária adaptativa", meta: `${cardGoal} flashcards vencidos + novos · intervalo individual`, type: "cards" });
     let mockIndex = 0;
     for (let mockDay = planningStartIndex + mockExamCadence * 7 - 2; mockDay < generationLength; mockDay += mockExamCadence * 7) {
-      generated.push({ id: 88000 + mockIndex * 2, day: mockDay, topic: "Prova completa", meta: "Simulado integral · 4h · condições reais de prova", type: "mock", sourceKey: `mock:${mockIndex}:exam` });
-      if (mockDay + 1 < generationLength) generated.push({ id: 88001 + mockIndex * 2, day: mockDay + 1, topic: "Correção da prova completa", meta: "2h · classificar erros, registrar o novo acerto e recalcular revisões", type: "correction", sourceKey: `mock:${mockIndex}:correction` });
+      generated.push({ id: stableAgendaId(`mock:${mockIndex}`), source: "generated", day: mockDay, topic: "Prova completa", meta: "Simulado integral · 4h · condições reais de prova", type: "mock" });
+      if (mockDay + 1 < generationLength) generated.push({ id: stableAgendaId(`mock-correction:${mockIndex}`), source: "generated", day: mockDay + 1, topic: "Correção da prova completa", meta: "2h · classificar erros, registrar o novo acerto e recalcular revisões", type: "correction" });
       mockIndex += 1;
     }
     const seenEvents = new Set<string>();
@@ -1155,8 +1157,8 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       seenEvents.add(key);
       return true;
     }).map(event => ({ ...event, date: calendarDays[event.day]?.iso }));
-  }, [focusArea, focusPercentage, weeklyTopics, weekTopicChoices, priorities, questionLogs, dailyCards, mockExamCadence, calendarDays, generationLength, planningStartIndex, currentDayIndex, teachingWeeks, lessonsPerWeek, planningTopics]);
-  const suggestionKey = useMemo(() => JSON.stringify({ calendarStart: calendarDays[0]?.iso, focusArea, focusPercentage, lessonsPerWeek, weeklyTopics, weekTopicChoices, mockExamCadence, suggested: suggestedAgenda.map(event => [event.day, event.topic, event.meta]) }), [calendarDays, focusArea, focusPercentage, lessonsPerWeek, weeklyTopics, weekTopicChoices, mockExamCadence, suggestedAgenda]);
+  }, [focusArea, focusPercentage, weeklyTopics, weekTopicChoices, excludedTopicKeys, priorities, dailyCards, mockExamCadence, calendarDays, generationLength, planningStartIndex, teachingWeeks, lessonsPerWeek, planningTopics, buildLessonCycle]);
+  const suggestionKey = useMemo(() => JSON.stringify({ calendarStart: calendarDays[0]?.iso, focusArea, focusPercentage, lessonsPerWeek, weeklyTopics, weekTopicChoices, excludedTopicKeys, mockExamCadence, suggested: suggestedAgenda.map(event => [event.id, event.day, event.topic, event.meta]) }), [calendarDays, focusArea, focusPercentage, lessonsPerWeek, weeklyTopics, weekTopicChoices, excludedTopicKeys, mockExamCadence, suggestedAgenda]);
   const suggestionSnapshot = useRef({ agenda: suggestedAgenda, key: suggestionKey });
   useEffect(() => { suggestionSnapshot.current = { agenda: suggestedAgenda, key: suggestionKey }; }, [suggestedAgenda, suggestionKey]);
 
@@ -1167,7 +1169,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
         const suggestion = suggestionSnapshot.current;
         const result = await supabase?.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "agenda").maybeSingle();
         const localKey = `gps-agenda-state-${profileId}`;
-        let localData: { events?: AgendaEvent[]; rotation?: typeof rotation; suggestionKey?: string; weekTopicChoices?: Record<string, string[]>; deletedGeneratedIds?: number[]; deletedGeneratedKeys?: string[]; planStartIso?: string; lastAutoReprogramIso?: string } | null = null;
+        let localData: { events?: AgendaEvent[]; rotation?: typeof rotation; suggestionKey?: string; weekTopicChoices?: Record<string, string[]>; deletedGeneratedIds?: number[]; excludedTopicKeys?: string[]; planStartIso?: string; lastAutoReprogramIso?: string } | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null"); } catch { localData = null; }
         const parsed = result?.data?.data ?? localData;
         if (parsed) {
@@ -1175,21 +1177,12 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
           setPlanStartIso(loadedStart);
           if (Array.isArray(parsed.events)) {
             const seen = new Set<string>();
-            const suggestedById = new Map(suggestion.agenda.map(event => [event.id, event]));
             setEvents(parsed.events.filter((event: AgendaEvent) => {
               const key = `${event.day}|${event.type}|${topicKey(event.topic)}`;
               if (seen.has(key)) return false;
               seen.add(key);
               return true;
-            }).map((event: AgendaEvent) => {
-              const generatedMatch = suggestedById.get(event.id);
-              return inferAgendaIdentity({
-                ...event,
-                date: event.date ?? dateForAgendaDay(loadedStart, event.day),
-                sourceKey: event.sourceKey ?? generatedMatch?.sourceKey,
-                lessonKey: event.lessonKey ?? generatedMatch?.lessonKey,
-              });
-            }));
+            }).map((event: AgendaEvent) => event.date ? event : { ...event, date: dateForAgendaDay(loadedStart, event.day) }));
           } else setEvents(suggestion.agenda);
           const loadedDate = new Date(`${loadedStart}T12:00:00`); loadedDate.setDate(loadedDate.getDate() - ((loadedDate.getDay() + 6) % 7));
           const dayDistance = Math.max(0, Math.floor((new Date(`${localDateIso()}T12:00:00`).getTime() - loadedDate.getTime()) / 86400000));
@@ -1197,10 +1190,9 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
           setRotation(currentRotation => parsed.rotation ?? currentRotation);
           setWeekTopicChoices(parsed.weekTopicChoices ?? {});
           setDeletedGeneratedIds(parsed.deletedGeneratedIds ?? []);
-          const migratedKeys = (parsed.deletedGeneratedIds ?? []).map((id: number) => suggestion.agenda.find(event => event.id === id)?.sourceKey).filter((key: string | undefined): key is string => Boolean(key));
-          setDeletedGeneratedKeys([...new Set([...(parsed.deletedGeneratedKeys ?? []), ...migratedKeys])]);
+          setExcludedTopicKeys(parsed.excludedTopicKeys ?? []);
           setLastAutoReprogramIso(parsed.lastAutoReprogramIso ?? "");
-        } else { setPlanStartIso(localDateIso()); setEvents(suggestion.agenda); setRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 }); setWeekTopicChoices({}); setDeletedGeneratedIds([]); setDeletedGeneratedKeys([]); setLastAutoReprogramIso(""); }
+        } else { setPlanStartIso(localDateIso()); setEvents(suggestion.agenda); setRotation({ area: "Nenhum rodízio cadastrado", start: "", end: "", boost: 40 }); setWeekTopicChoices({}); setDeletedGeneratedIds([]); setExcludedTopicKeys([]); setLastAutoReprogramIso(""); }
         loadedSuggestionKey.current = parsed ? parsed.suggestionKey ?? "" : suggestion.key;
         setAgendaHydrated(true);
       };
@@ -1212,17 +1204,15 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   useEffect(() => {
     if (!agendaHydrated || loadedSuggestionKey.current === suggestionKey) return;
     setEvents(previous => {
-      const preserved = previous.filter(event => event.id < 81000 || event.id >= 90000 || event.customized);
-      const preservedIds = new Set(preserved.map(event => event.id));
-      const preservedSourceKeys = new Set(preserved.filter(event => event.customized && event.sourceKey).map(event => event.sourceKey));
-      const preservedLegacyTopics = new Set(preserved.filter(event => event.customized && !event.sourceKey).map(event => `${event.type}|${topicKey(event.topic)}`));
       const previousById = new Map(previous.map(event => [event.id, event]));
-      const refreshed = suggestedAgenda.filter(event => !deletedGeneratedIds.includes(event.id) && !deletedGeneratedKeys.includes(event.sourceKey ?? "") && !preservedIds.has(event.id) && !preservedSourceKeys.has(event.sourceKey) && !preservedLegacyTopics.has(`${event.type}|${topicKey(event.topic)}`)).map(event => {
+      const manual = previous.filter(event => event.source === "manual" || (!event.source && (event.id < 81000 || event.id >= 90000)));
+      const refreshed = suggestedAgenda.filter(event => !deletedGeneratedIds.includes(event.id)).map(event => {
         const old = previousById.get(event.id);
-        return old ? { ...event, completed: old.completed, studied: old.studied } : event;
+        if (!old) return event;
+        return old.customized || old.autoReprogrammedAt ? { ...old, source: "generated" as const, date: calendarDays[old.day]?.iso ?? dateForAgendaDay(planStartIso, old.day) } : { ...event, completed: old.completed, studied: old.studied };
       });
       const seen = new Set<string>();
-      return [...preserved, ...refreshed].filter(event => {
+      return [...manual, ...refreshed].filter(event => {
         const key = `${event.day}|${event.type}|${topicKey(event.topic)}`;
         if (seen.has(key)) return false;
         seen.add(key);
@@ -1232,17 +1222,17 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
     loadedSuggestionKey.current = suggestionKey;
     setLastAutoReprogramIso("");
     setToast(focusArea ? `Cronograma recalculado para ${focusArea}, respeitando as prioridades das bancas.` : "Escolha uma grande área para gerar a semana.");
-  }, [agendaHydrated, suggestionKey, suggestedAgenda, focusArea, setToast, deletedGeneratedIds, deletedGeneratedKeys]);
+  }, [agendaHydrated, suggestionKey, suggestedAgenda, focusArea, setToast, deletedGeneratedIds, calendarDays, planStartIso]);
 
   const reprogramOverdue = useCallback((automatic = false) => {
-    const result = reprogramAgendaWithoutOverload(events, todayIso, currentDayIndex, deletedGeneratedKeys);
+    const result = reprogramAgendaWithoutOverload(events, todayIso, currentDayIndex);
     setEvents(result.events);
     setLastAutoReprogramIso(todayIso);
     setWeekOffset(Math.min(calendarWeeks - 1, Math.floor(currentDayIndex / 7)));
     if (result.overdueCount) {
       setToast(`${result.overdueCount} bloco${result.overdueCount > 1 ? "s" : ""} atrasado${result.overdueCount > 1 ? "s" : ""} ${result.overdueCount > 1 ? "foram movidos" : "foi movido"} para hoje. Toda a rota pendente avançou ${result.delayDays} dia${result.delayDays > 1 ? "s" : ""}, sem juntar cargas.`);
     } else if (!automatic) setToast("Sua agenda está em dia. Hoje já está sincronizado e nenhuma tarefa foi acumulada.");
-  }, [events, todayIso, currentDayIndex, calendarWeeks, deletedGeneratedKeys, setToast]);
+  }, [events, todayIso, currentDayIndex, calendarWeeks, setToast]);
 
   useEffect(() => {
     if (!agendaHydrated || lastAutoReprogramIso === todayIso) return;
@@ -1258,7 +1248,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
 
   useEffect(() => {
     if (!agendaHydrated) return;
-    const state = { events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, deletedGeneratedKeys, planStartIso, lastAutoReprogramIso };
+    const state = { events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, excludedTopicKeys, planStartIso, lastAutoReprogramIso };
     localStorage.setItem(`gps-agenda-state-${profileId}`, JSON.stringify(state));
     onAgendaChange(events, rotation, suggestionKey);
     if (!supabase || profileId === "joao") { onSaveStatus("saved"); return; }
@@ -1269,16 +1259,18 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       if (error) { onSaveStatus("error"); setToast(`Falha ao salvar a agenda: ${error.message}`); }
       else onSaveStatus("saved");
     });
-  }, [events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, deletedGeneratedKeys, planStartIso, lastAutoReprogramIso, agendaHydrated, profileId, onSaveStatus, setToast, onAgendaChange]);
+  }, [events, rotation, suggestionKey, weekTopicChoices, deletedGeneratedIds, excludedTopicKeys, planStartIso, lastAutoReprogramIso, agendaHydrated, profileId, onSaveStatus, setToast, onAgendaChange]);
 
   const plannedTopicsThisWeek = events
     .filter(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7)
     .map(event => event.topic)
     .filter((topic, index, list) => list.findIndex(item => topicKey(item) === topicKey(topic)) === index)
     .slice(0, lessonsPerWeek);
-  const selectedTopicsThisWeek = (weekTopicChoices[String(weekOffset)] ?? (weekOffset === 0 ? weeklyTopics : []))
-    .filter((topic, index, list) => list.findIndex(item => topicKey(item) === topicKey(topic)) === index)
-    .slice(0, lessonsPerWeek);
+
+  function generatedCycleIds(topic: string) {
+    const lessonId = `lesson:${topicKey(topic)}`;
+    return new Set([stableAgendaId(`${lessonId}:theory`), stableAgendaId(`${lessonId}:questions`), ...Array.from({ length: 7 }, (_, index) => stableAgendaId(`${lessonId}:review:${index + 1}`))]);
+  }
 
   function setVisibleWeekTopics(titles: string[], incomingTopic = "") {
     const uniqueTitles = titles.filter((topic, index, list) => list.findIndex(item => topicKey(item) === topicKey(topic)) === index).slice(0, lessonsPerWeek);
@@ -1287,7 +1279,12 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
       next[String(weekOffset)] = uniqueTitles;
       return next;
     });
-    if (incomingTopic) setWeeklyTopics(previous => previous.filter(topic => topicKey(topic) !== topicKey(incomingTopic)));
+    if (incomingTopic) {
+      setWeeklyTopics(previous => previous.filter(topic => topicKey(topic) !== topicKey(incomingTopic)));
+      setExcludedTopicKeys(previous => previous.filter(key => key !== topicKey(incomingTopic)));
+      const restoredIds = generatedCycleIds(incomingTopic);
+      setDeletedGeneratedIds(previous => previous.filter(id => !restoredIds.has(id)));
+    }
   }
 
   function addTopicToVisibleWeek() {
@@ -1306,163 +1303,112 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
   }
 
   function removeTopicFromVisibleWeek(topic: string) {
-    setWeekTopicChoices(previous => ({ ...previous, [String(weekOffset)]: selectedTopicsThisWeek.filter(item => item !== topic) }));
-    setToast(`${topic} foi retirado da semana ${weekOffset + 1}.`);
+    if (!window.confirm(`Excluir “${topic}” da sua rota? A aula, as questões e todas as revisões vinculadas serão removidas.`)) return;
+    const key = topicKey(topic);
+    const family = events.filter(event => event.lessonId && topicKey(event.topic) === key);
+    setExcludedTopicKeys(previous => previous.includes(key) ? previous : [...previous, key]);
+    setDeletedGeneratedIds(previous => [...new Set([...previous, ...family.filter(event => event.source === "generated").map(event => event.id)])]);
+    setWeekTopicChoices(previous => ({ ...previous, [String(weekOffset)]: plannedTopicsThisWeek.filter(item => topicKey(item) !== key) }));
+    setWeeklyTopics(previous => previous.filter(item => topicKey(item) !== key));
+    setEvents(previous => previous.filter(event => !(event.lessonId && topicKey(event.topic) === key)));
+    onSetStudied(topic, false);
+    setToast(`${topic} e todo o seu ciclo foram excluídos: aula, questões e revisões. A próxima prioridade preencherá a vaga da semana.`);
   }
 
   function replaceTopicInVisibleWeek(outgoingTopic: string) {
     if (!pendingReplacement) return;
     const replacement = pendingReplacement;
     const nextTopics = plannedTopicsThisWeek.map(topic => topicKey(topic) === topicKey(outgoingTopic) ? replacement : topic);
+    setEvents(previous => previous.filter(event => !(event.lessonId && topicKey(event.topic) === topicKey(outgoingTopic))));
     setVisibleWeekTopics(nextTopics, replacement);
     setPendingReplacement("");
     setWeekTopicDraft("");
     setToast(`${replacement} substituiu ${outgoingTopic}. A aula retirada voltou para a fila e será reprogramada em outra semana.`);
   }
 
-  function openEventEditor(event: AgendaEvent, intent: "edit" | "move") {
-    setEditingEvent({ ...event });
-    setEditingIntent(intent);
-  }
-
-  function belongsToLesson(event: AgendaEvent, lesson: AgendaEvent) {
-    if (lesson.lessonKey) return event.lessonKey === lesson.lessonKey;
-    return lesson.id >= 81000 && lesson.id < 90000 && event.id >= 81000 && event.id < 90000 && topicKey(event.topic) === topicKey(lesson.topic) && ["theory", "questions", "review"].includes(event.type);
-  }
-
-  function eventDate(day: number) {
-    return calendarDays[day]?.iso ?? dateForAgendaDay(planStartIso, day);
-  }
-
   function moveEvent(id: number, day: number) {
     if (day < currentDayIndex) return setToast("O GPS não move tarefas para antes de hoje.");
     const moving = events.find(event => event.id === id);
-    if (!moving) return;
-    if (events.some(event => event.id !== id && event.day === day && event.type === moving.type && topicKey(event.topic) === topicKey(moving.topic))) return setToast("Esse mesmo bloco já existe no dia escolhido.");
-    const delta = day - moving.day;
-    const moveLesson = moving.type === "theory";
-    setEvents(previous => previous.map(event => {
-      const shouldMove = event.id === id || (moveLesson && belongsToLesson(event, moving));
-      if (!shouldMove) return event;
-      const nextDay = Math.max(0, event.day + delta);
-      return { ...event, day: nextDay, date: eventDate(nextDay), customized: true };
-    }));
-    setDragged(null);
-    setDragOverDay(null);
-    setToast(moveLesson ? `Aula movida para ${eventDate(day).split("-").reverse().join("/")}. Questões e revisões acompanharam a nova data.` : `Bloco movido para ${eventDate(day).split("-").reverse().join("/")}.`);
-  }
-
-  function startCardDrag(event: ReactDragEvent<HTMLElement>, eventId: number) {
-    const origin = event.target as HTMLElement;
-    if (origin.closest("button, input, select, textarea, a")) {
-      event.preventDefault();
-      return;
+    if (moving && events.some(event => event.id !== id && event.day === day && event.type === moving.type && topicKey(event.topic) === topicKey(moving.topic))) return setToast("Esse mesmo bloco já existe no dia escolhido.");
+    if (moving?.type === "theory" && moving.lessonId) {
+      const delta = day - moving.day;
+      setEvents(previous => previous.map(event => event.lessonId === moving.lessonId ? { ...event, day: Math.max(currentDayIndex, event.day + delta), date: calendarDays[Math.max(currentDayIndex, event.day + delta)]?.iso ?? dateForAgendaDay(planStartIso, Math.max(currentDayIndex, event.day + delta)), customized: true } : event));
+    } else {
+      setEvents(previous => previous.map(event => event.id === id ? { ...event, day, date: calendarDays[day]?.iso ?? dateForAgendaDay(planStartIso, day), customized: true } : event));
     }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", String(eventId));
-    setDragged(eventId);
-  }
-
-  function finishCardDrag() {
     setDragged(null);
-    setDragOverDay(null);
-  }
-
-  function dropCard(event: ReactDragEvent<HTMLElement>, day: number) {
-    event.preventDefault();
-    const transferredId = Number(event.dataTransfer.getData("text/plain"));
-    const eventId = Number.isFinite(transferredId) && transferredId > 0 ? transferredId : dragged;
-    if (eventId !== null) moveEvent(eventId, day);
-    else finishCardDrag();
-  }
-
-  function startTouchDrag(event: ReactPointerEvent<HTMLButtonElement>, eventId: number) {
-    if (event.pointerType === "mouse") return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    touchDrag.current = { eventId, pointerId: event.pointerId };
-    setDragged(eventId);
-  }
-
-  function updateTouchDrag(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (!touchDrag.current || touchDrag.current.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
-    const dayElement = target?.closest<HTMLElement>("[data-agenda-day]");
-    setDragOverDay(dayElement ? Number(dayElement.dataset.agendaDay) : null);
-  }
-
-  function finishTouchDrag(event: ReactPointerEvent<HTMLButtonElement>) {
-    const active = touchDrag.current;
-    if (!active || active.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
-    const dayElement = target?.closest<HTMLElement>("[data-agenda-day]");
-    const targetDay = dayElement ? Number(dayElement.dataset.agendaDay) : dragOverDay;
-    touchDrag.current = null;
-    if (targetDay !== null && Number.isFinite(targetDay)) moveEvent(active.eventId, targetDay);
-    else finishCardDrag();
+    setToast(moving?.type === "theory" && moving.lessonId ? `A aula foi movida para ${calendarDays[day]?.label ?? "o novo dia"}; questões e revisões acompanharam o mesmo intervalo.` : `Bloco movido para ${calendarDays[day]?.label ?? "o novo dia"}. A rota foi ajustada.`);
   }
 
   function saveBlock() {
     if (!newBlock.topic.trim()) return setToast("Digite o assunto do novo bloco.");
     if (events.some(event => event.day === newBlock.day && event.type === newBlock.type && topicKey(event.topic) === topicKey(newBlock.topic))) return setToast("Esse mesmo bloco já está neste dia.");
-    setEvents(prev => [...prev, { id: Date.now(), ...newBlock, date: calendarDays[newBlock.day]?.iso }]);
+    const matched = planningTopics.find(topic => topicKey(topic.title) === topicKey(newBlock.topic));
+    const canonicalTopic = matched?.title ?? newBlock.topic.trim();
+    if (newBlock.type === "theory") {
+      if (events.some(event => event.type === "theory" && topicKey(event.topic) === topicKey(canonicalTopic))) return setToast("Esse assunto já possui uma aula no plano. Edite ou mova a aula existente.");
+      const lessonId = `manual:${Date.now()}:${topicKey(canonicalTopic)}`;
+      setExcludedTopicKeys(previous => previous.filter(key => key !== topicKey(canonicalTopic)));
+      setEvents(previous => [...previous, ...buildLessonCycle(canonicalTopic, newBlock.day, lessonId, "manual", newBlock.meta || undefined)]);
+      setToast("Aula incluída com questões e toda a sequência de revisões espaçadas.");
+    } else {
+      setEvents(previous => [...previous, { id: Date.now(), ...newBlock, topic: canonicalTopic, source: "manual", date: calendarDays[newBlock.day]?.iso ?? dateForAgendaDay(planStartIso, newBlock.day) }]);
+      setToast("Bloco incluído na agenda.");
+    }
     setAddOpen(false);
     setNewBlock({ topic: "", day: Math.max(weekOffset * 7, currentDayIndex), meta: "2h", type: "theory" });
-    setToast("Bloco incluído na agenda.");
   }
 
   function saveEditedEvent() {
     if (!editingEvent?.topic.trim()) return setToast("Informe o assunto do bloco.");
     const original = events.find(event => event.id === editingEvent.id);
     if (!original) return setEditingEvent(null);
-    if (editingEvent.day < currentDayIndex && !original.completed) return setToast("Uma atividade pendente não pode ser movida para antes de hoje.");
     if (events.some(event => event.id !== editingEvent.id && event.day === editingEvent.day && event.type === editingEvent.type && topicKey(event.topic) === topicKey(editingEvent.topic))) return setToast("Esse mesmo bloco já está neste dia.");
-    const delta = editingEvent.day - original.day;
-    const updateLesson = original.type === "theory";
-    const changedLessonTopic = updateLesson && topicKey(original.topic) !== topicKey(editingEvent.topic);
-    const nextLessonKey = changedLessonTopic ? `lesson:${topicKey(editingEvent.topic)}` : original.lessonKey;
-    const duplicateLessonEvents = changedLessonTopic ? events.filter(event => event.id !== original.id && event.lessonKey === nextLessonKey) : [];
-    const duplicateIds = new Set(duplicateLessonEvents.map(event => event.id));
-    const duplicateGeneratedIds = duplicateLessonEvents.filter(event => event.id >= 81000 && event.id < 90000).map(event => event.id);
-    const duplicateGeneratedKeys = duplicateLessonEvents.map(event => event.sourceKey).filter((key): key is string => Boolean(key));
-    if (duplicateGeneratedIds.length) setDeletedGeneratedIds(previous => [...new Set([...previous, ...duplicateGeneratedIds])]);
-    if (duplicateGeneratedKeys.length) setDeletedGeneratedKeys(previous => [...new Set([...previous, ...duplicateGeneratedKeys])]);
-    if (changedLessonTopic) {
-      const replaceTopic = (topics: string[]) => topics.map(topic => topicKey(topic) === topicKey(original.topic) ? editingEvent.topic.trim() : topic).filter((topic, index, list) => list.findIndex(item => topicKey(item) === topicKey(topic)) === index);
-      setWeeklyTopics(replaceTopic);
-      setWeekTopicChoices(previous => Object.fromEntries(Object.entries(previous).map(([week, topics]) => [week, replaceTopic(topics)])));
+    if (original.type === "theory" && original.lessonId) {
+      const matched = planningTopics.find(topic => topicKey(topic.title) === topicKey(editingEvent.topic));
+      if (!matched) return setToast("Para alterar uma aula, escolha um assunto da lista cadastrada.");
+      const topicChanged = topicKey(matched.title) !== topicKey(original.topic);
+      if (topicChanged && events.some(event => event.type === "theory" && event.lessonId !== original.lessonId && topicKey(event.topic) === topicKey(matched.title))) return setToast("Esse assunto já está programado em outra semana. Mova a aula existente para evitar duplicidade.");
+      if (topicChanged) {
+        const targetWeek = Math.floor(editingEvent.day / 7);
+        const topicsInTargetWeek = events.filter(event => event.type === "theory" && event.day >= targetWeek * 7 && event.day < targetWeek * 7 + 7).map(event => event.topic);
+        const nextTopics = topicsInTargetWeek.map(topic => topicKey(topic) === topicKey(original.topic) ? matched.title : topic);
+        setWeekTopicChoices(previous => ({ ...previous, [String(targetWeek)]: nextTopics }));
+        setExcludedTopicKeys(previous => previous.filter(key => key !== topicKey(matched.title)));
+        const restoredIds = generatedCycleIds(matched.title);
+        setDeletedGeneratedIds(previous => previous.filter(id => !restoredIds.has(id)));
+        setEvents(previous => previous.filter(event => event.lessonId !== original.lessonId));
+        setToast(`${matched.title} substituiu ${original.topic}. O ciclo antigo foi retirado desta semana e será reprogramado; o novo ganhou questões e revisões próprias.`);
+      } else {
+        const delta = editingEvent.day - original.day;
+        setEvents(previous => previous.map(event => event.lessonId === original.lessonId ? { ...event, day: Math.max(currentDayIndex, event.day + delta), date: calendarDays[Math.max(currentDayIndex, event.day + delta)]?.iso ?? dateForAgendaDay(planStartIso, Math.max(currentDayIndex, event.day + delta)), meta: event.id === original.id ? editingEvent.meta : event.meta, customized: true } : event));
+        setToast("A aula foi atualizada; questões e revisões permaneceram vinculadas ao novo dia.");
+      }
+      setEditingEvent(null);
+      return;
     }
-    setEvents(previous => previous.map(event => {
-      if (event.id === original.id) return { ...editingEvent, topic: editingEvent.topic.trim(), date: eventDate(editingEvent.day), lessonKey: nextLessonKey, customized: true };
-      if (!updateLesson || !belongsToLesson(event, original)) return event;
-      const nextDay = Math.max(0, event.day + delta);
-      return { ...event, topic: editingEvent.topic.trim(), day: nextDay, date: eventDate(nextDay), lessonKey: nextLessonKey, customized: true };
-    }).filter(event => !duplicateIds.has(event.id)));
-    setEditingEvent(null);
-    setToast(updateLesson ? "Aula atualizada. As questões e revisões vinculadas também foram ajustadas." : editingIntent === "move" ? "Bloco movido e salvo." : "Bloco atualizado e salvo.");
+    setEvents(previous => previous.map(event => event.id === editingEvent.id ? { ...editingEvent, date: calendarDays[editingEvent.day]?.iso ?? dateForAgendaDay(planStartIso, editingEvent.day), customized: true } : event)); setEditingEvent(null); setToast("Bloco atualizado e salvo na sua agenda.");
   }
 
-  function confirmRemoveEvent() {
-    if (!pendingDeleteEvent) return;
-    const target = events.find(event => event.id === pendingDeleteEvent.id) ?? pendingDeleteEvent;
-    const removeLesson = target.type === "theory";
-    const targets = events.filter(event => event.id === target.id || (removeLesson && belongsToLesson(event, target)));
-    const targetIds = new Set(targets.map(event => event.id));
-    const generatedIds = targets.filter(event => event.id >= 81000 && event.id < 90000).map(event => event.id);
-    const generatedKeys = targets.map(event => event.sourceKey).filter((key): key is string => Boolean(key));
-    setDeletedGeneratedIds(previous => [...new Set([...previous, ...generatedIds])]);
-    setDeletedGeneratedKeys(previous => [...new Set([...previous, ...generatedKeys])]);
-    setEvents(previous => previous.filter(event => !targetIds.has(event.id)));
-    if (removeLesson) {
-      setWeeklyTopics(previous => previous.filter(topic => topicKey(topic) !== topicKey(target.topic)));
-      setWeekTopicChoices(previous => Object.fromEntries(Object.entries(previous).map(([week, topics]) => [week, topics.filter(topic => topicKey(topic) !== topicKey(target.topic))])));
+  function removeEvent(id: number) {
+    const target = events.find(event => event.id === id);
+    if (!target) return;
+    if (target.type === "theory" && target.lessonId) {
+      if (!window.confirm(`Excluir “${target.topic}” da sua rota? A aula, as questões e todas as revisões vinculadas serão removidas.`)) return;
+      const family = events.filter(event => event.lessonId === target.lessonId);
+      const key = topicKey(target.topic);
+      setExcludedTopicKeys(previous => previous.includes(key) ? previous : [...previous, key]);
+      setDeletedGeneratedIds(previous => [...new Set([...previous, ...family.filter(event => event.source === "generated").map(event => event.id)])]);
+      setWeekTopicChoices(previous => ({ ...previous, [String(Math.floor(target.day / 7))]: events.filter(event => event.type === "theory" && event.day >= Math.floor(target.day / 7) * 7 && event.day < Math.floor(target.day / 7) * 7 + 7 && event.lessonId !== target.lessonId).map(event => event.topic) }));
+      setWeeklyTopics(previous => previous.filter(item => topicKey(item) !== key));
+      setEvents(previous => previous.filter(event => event.lessonId !== target.lessonId));
+      onSetStudied(target.topic, false);
+      setEditingEvent(null);
+      setToast(`${target.topic} foi excluído com suas questões e revisões. A vaga será preenchida pela próxima prioridade do plano.`);
+      return;
     }
-    setPendingDeleteEvent(null);
-    setEditingEvent(null);
-    setToast(removeLesson ? `A aula “${target.topic}” foi excluída com suas questões e revisões e não voltará no recálculo.` : `“${target.topic}” foi excluído e não voltará no recálculo.`);
+    if (target.source === "generated") setDeletedGeneratedIds(previous => previous.includes(id) ? previous : [...previous, id]);
+    setEvents(previous => previous.filter(event => event.id !== id)); setEditingEvent(null); setToast("Bloco removido. Você continua livre para reorganizar a semana.");
   }
 
   function eventLabel(type: AgendaEvent["type"]) {
@@ -1496,20 +1442,19 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
 
     <section className="panel week-topic-editor">
       <div><span className="section-kicker">ESCOLHAS DA SEMANA {weekOffset + 1}</span><h2>{weekOffset < teachingWeeks ? `${plannedTopicsThisWeek.length} de ${lessonsPerWeek} aulas programadas` : "Cauda de consolidação"}</h2><p>{weekOffset < teachingWeeks ? `A meta automática é sempre ${lessonsPerWeek}. Se a semana estiver cheia, incluir um assunto abre a troca; a aula retirada é reprogramada mais adiante. Aulas extras só entram pelo botão “Adicionar bloco”.` : "Após a cobertura de todos os assuntos, permanecem revisões espaçadas, flashcards, provas e correções."}</p></div>
-      {weekOffset < teachingWeeks && <div className="week-topic-controls"><div><input list="week-topic-options" value={weekTopicDraft} onChange={event => { setWeekTopicDraft(event.target.value); setPendingReplacement(""); }} onKeyDown={event => { if (event.key === "Enter") addTopicToVisibleWeek(); }} placeholder="Busque um assunto" /><datalist id="week-topic-options">{planningTopics.map(topic => <option key={topic.id} value={topic.title}>{topic.area}</option>)}</datalist><button onClick={addTopicToVisibleWeek}><Plus size={15} /> {plannedTopicsThisWeek.length >= lessonsPerWeek ? "Trocar assunto" : "Incluir nesta semana"}</button></div>{pendingReplacement && <div className="replacement-guide"><strong>Qual aula deseja substituir por “{pendingReplacement}”?</strong><small>A escolhida não será perdida: ela voltará automaticamente em uma semana futura.</small></div>}<div className={`weekly-topic-chips ${pendingReplacement ? "replacement-active" : ""}`}>{plannedTopicsThisWeek.length ? plannedTopicsThisWeek.map(topic => <span key={topic}>{topic}{pendingReplacement ? <button onClick={() => replaceTopicInVisibleWeek(topic)} aria-label={`Substituir ${topic}`}>Substituir</button> : selectedTopicsThisWeek.some(item => topicKey(item) === topicKey(topic)) ? <button onClick={() => removeTopicFromVisibleWeek(topic)} aria-label={`Liberar ${topic}`}><X size={13} /></button> : null}</span>) : <small>As {lessonsPerWeek} aulas serão preenchidas automaticamente.</small>}</div>{pendingReplacement && <button className="cancel-replacement" onClick={() => setPendingReplacement("")}>Cancelar troca</button>}</div>}
+      {weekOffset < teachingWeeks && <div className="week-topic-controls"><div><input list="week-topic-options" value={weekTopicDraft} onChange={event => { setWeekTopicDraft(event.target.value); setPendingReplacement(""); }} onKeyDown={event => { if (event.key === "Enter") addTopicToVisibleWeek(); }} placeholder="Busque um assunto" /><datalist id="week-topic-options">{planningTopics.map(topic => <option key={topic.id} value={topic.title}>{topic.area}</option>)}</datalist><button onClick={addTopicToVisibleWeek}><Plus size={15} /> {plannedTopicsThisWeek.length >= lessonsPerWeek ? "Trocar assunto" : "Incluir nesta semana"}</button></div>{pendingReplacement && <div className="replacement-guide"><strong>Qual aula deseja substituir por “{pendingReplacement}”?</strong><small>A escolhida não será perdida: ela voltará automaticamente em uma semana futura.</small></div>}<div className={`weekly-topic-chips week-course-list ${pendingReplacement ? "replacement-active" : ""}`}>{plannedTopicsThisWeek.length ? plannedTopicsThisWeek.map(topic => { const theoryEvent = events.find(event => event.type === "theory" && event.day >= weekOffset * 7 && event.day < weekOffset * 7 + 7 && topicKey(event.topic) === topicKey(topic)); return <span key={topic}><span className="week-course-copy"><strong>{topic}</strong><small>Aula + questões + revisões vinculadas</small></span>{pendingReplacement ? <button onClick={() => replaceTopicInVisibleWeek(topic)} aria-label={`Substituir ${topic}`}>Substituir</button> : <span className="week-course-actions"><button onClick={() => theoryEvent && setEditingEvent(theoryEvent)} aria-label={`Editar ${topic}`}><Pencil size={13} /> Editar</button><button className="delete" onClick={() => removeTopicFromVisibleWeek(topic)} aria-label={`Excluir ${topic}`}><Trash2 size={13} /> Excluir</button></span>}</span>; }) : <small>As {lessonsPerWeek} aulas serão preenchidas automaticamente.</small>}</div>{pendingReplacement && <button className="cancel-replacement" onClick={() => setPendingReplacement("")}>Cancelar troca</button>}</div>}
     </section>
 
     <section className="panel agenda-panel">
-      <div className="agenda-toolbar"><div><h2>Semana {weekOffset + 1} de {calendarWeeks} · {visibleDays[0]?.number} {visibleDays[0]?.month} a {visibleDays[6]?.number} {visibleDays[6]?.month}</h2><p>{weekOffset === Math.floor(currentDayIndex / 7) ? "Arraste qualquer cartão para outro dia. No celular, arraste pelo ícone de seis pontos. O dia de hoje é destacado e a rota é verificada diariamente." : "Arraste qualquer cartão para reorganizar esta semana. Use “Ir para hoje” para voltar à rota atual."}</p></div><div><button className="today-route-button" onClick={() => setWeekOffset(Math.min(calendarWeeks - 1, Math.floor(currentDayIndex / 7)))}><CalendarClock size={15} /> Ir para hoje</button><button className="week-arrow" disabled={weekOffset === 0} onClick={() => setWeekOffset(value => Math.max(0, value - 1))} aria-label="Semana anterior"><ChevronRight size={17} /></button><button className="week-arrow next" disabled={weekOffset === calendarWeeks - 1} onClick={() => setWeekOffset(value => Math.min(calendarWeeks - 1, value + 1))} aria-label="Próxima semana"><ChevronRight size={17} /></button><button className="primary-button" onClick={() => { setNewBlock(previous => ({ ...previous, day: Math.max(weekOffset * 7, currentDayIndex) })); setAddOpen(true); }}><Plus size={16} /> Adicionar bloco</button></div></div>
+      <div className="agenda-toolbar"><div><h2>Semana {weekOffset + 1} de {calendarWeeks} · {visibleDays[0]?.number} {visibleDays[0]?.month} a {visibleDays[6]?.number} {visibleDays[6]?.month}</h2><p>{weekOffset === Math.floor(currentDayIndex / 7) ? "Você está na semana atual. O dia de hoje é destacado e a rota é verificada diariamente." : "Você está consultando outra semana. Use “Ir para hoje” para voltar à rota atual."}</p></div><div><button className="today-route-button" onClick={() => setWeekOffset(Math.min(calendarWeeks - 1, Math.floor(currentDayIndex / 7)))}><CalendarClock size={15} /> Ir para hoje</button><button className="week-arrow" disabled={weekOffset === 0} onClick={() => setWeekOffset(value => Math.max(0, value - 1))} aria-label="Semana anterior"><ChevronRight size={17} /></button><button className="week-arrow next" disabled={weekOffset === calendarWeeks - 1} onClick={() => setWeekOffset(value => Math.min(calendarWeeks - 1, value + 1))} aria-label="Próxima semana"><ChevronRight size={17} /></button><button className="primary-button" onClick={() => { setNewBlock(previous => ({ ...previous, day: Math.max(weekOffset * 7, currentDayIndex) })); setAddOpen(true); }}><Plus size={16} /> Adicionar bloco</button></div></div>
       <div className="interactive-week">
-        {visibleDays.map(day => <div data-agenda-day={day.absolute} className={`day-column ${day.iso === todayIso ? "today" : ""} ${day.absolute < currentDayIndex ? "past" : ""} ${dragOverDay === day.absolute ? "drag-over" : ""}`} key={day.iso} onDragEnter={() => setDragOverDay(day.absolute)} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverDay(current => current === day.absolute ? null : current); }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={event => dropCard(event, day.absolute)}>
+        {visibleDays.map(day => <div className={`day-column ${day.iso === todayIso ? "today" : ""} ${day.absolute < currentDayIndex ? "past" : ""}`} key={day.iso} onDragOver={event => event.preventDefault()} onDrop={() => dragged && moveEvent(dragged, day.absolute)}>
           <header><span>{day.label}</span><strong>{day.number}</strong>{day.iso === todayIso && <b>HOJE</b>}</header>
           <div className="day-events">
-            {events.filter(event => event.day === day.absolute).map(event => <article draggable className={`agenda-event ${event.type} ${event.completed ? "completed" : ""} ${dragged === event.id ? "dragging" : ""}`} key={event.id} onDragStart={dragEvent => startCardDrag(dragEvent, event.id)} onDragEnd={finishCardDrag} title="Arraste este cartão para outro dia">
-              <div className="event-top"><button className="drag-handle" onPointerDown={pointerEvent => startTouchDrag(pointerEvent, event.id)} onPointerMove={updateTouchDrag} onPointerUp={finishTouchDrag} onPointerCancel={() => { touchDrag.current = null; finishCardDrag(); }} title="Arrastar para outro dia" aria-label={`Arrastar ${event.topic}`}><GripVertical size={14} /></button><span>{eventLabel(event.type)}</span>{event.customized && <em>AJUSTADO</em>}</div>
+            {events.filter(event => event.day === day.absolute).map(event => <article className={`agenda-event ${event.type} ${event.completed ? "completed" : ""}`} draggable key={event.id} onDragStart={() => setDragged(event.id)}>
+              <div className="event-top"><GripVertical size={13} /><span>{eventLabel(event.type)}</span><div><button onClick={() => setEditingEvent(event)} aria-label="Editar bloco"><Pencil size={11} /></button><button onClick={() => removeEvent(event.id)} aria-label="Remover bloco"><Trash2 size={11} /></button></div></div>
               <strong>{event.topic}</strong><small>{event.meta}</small>
-              <button className={`event-study ${event.studied ? "done" : ""}`} onClick={() => toggleEventStudied(event.id, event.topic)}>{event.studied ? <Check size={13} /> : <BookOpenCheck size={13} />}{event.studied ? "Desmarcar estudado" : "Marcar estudado"}</button>
-              <div className="event-actions"><button onClick={() => openEventEditor(event, "edit")}><Pencil size={12} /> Editar</button><button onClick={() => openEventEditor(event, "move")}><CalendarClock size={12} /> Mover</button><button className="delete" onClick={() => setPendingDeleteEvent(event)}><Trash2 size={12} /> Excluir</button></div>
+              <button className={`event-study ${event.studied ? "done" : ""}`} onClick={() => toggleEventStudied(event.id, event.topic)}>{event.studied ? <Check size={13} /> : <BookOpenCheck size={13} />}{event.studied ? "Desmarcar estudado" : "Marcar estudado"}</button><div className="event-move"><button disabled={day.absolute === 0} onClick={() => moveEvent(event.id, day.absolute - 1)} aria-label="Mover para o dia anterior">‹</button><button disabled={day.absolute === calendarLength - 1} onClick={() => moveEvent(event.id, day.absolute + 1)} aria-label="Mover para o próximo dia">›</button></div>
             </article>)}
             {day.absolute >= currentDayIndex && <button className="day-add" onClick={() => { setNewBlock(prev => ({ ...prev, day: day.absolute })); setAddOpen(true); }}><Plus size={14} /> adicionar</button>}
           </div>
@@ -1524,9 +1469,7 @@ function PlanPage({ setToast, profileId, focusArea, focusPercentage, weeklyTopic
 
       {addOpen && <div className="modal-backdrop" onMouseDown={() => setAddOpen(false)}><div className="modal compact" role="dialog" aria-modal="true" aria-label="Adicionar bloco" onMouseDown={e => e.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">AGENDA LIVRE</span><h2>Novo bloco de estudo</h2><p>Adicione qualquer assunto, mesmo fora da área-foco.</p></div><button className="icon-button" onClick={() => setAddOpen(false)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="agenda-topic-options" value={newBlock.topic} onChange={e => setNewBlock({ ...newBlock, topic: e.target.value })} placeholder="Ex.: Rotura prematura de membranas" /><datalist id="agenda-topic-options">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={newBlock.day} onChange={e => setNewBlock({ ...newBlock, day: Number(e.target.value) })}>{visibleDays.filter(day => day.absolute >= currentDayIndex).map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={newBlock.type} onChange={e => setNewBlock({ ...newBlock, type: e.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="materials">Materiais</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção de prova</option></select></label></div><label className="plain-field">Duração ou volume<input value={newBlock.meta} onChange={e => setNewBlock({ ...newBlock, meta: e.target.value })} placeholder="Ex.: 15 questões · 1h" /></label><div className="modal-actions"><button className="text-button" onClick={() => setAddOpen(false)}>Cancelar</button><button className="primary-button" onClick={saveBlock}><Plus size={16} /> Adicionar à agenda</button></div></div></div>}
 
-    {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><div className="modal compact" role="dialog" aria-modal="true" aria-label={editingIntent === "move" ? "Mover bloco" : "Editar bloco"} onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">MEU PLANO EDITÁVEL</span><h2>{editingIntent === "move" ? "Mover para outra data" : "Editar atividade"}</h2><p>{editingEvent.type === "theory" ? "Ao alterar uma aula, as questões e revisões vinculadas acompanham automaticamente." : "A alteração fica salva neste perfil e não será desfeita pelo recálculo automático."}</p></div><button className="icon-button" onClick={() => setEditingEvent(null)}><X size={20} /></button></div>{editingIntent === "edit" ? <><label className="plain-field">Assunto<input list="edit-agenda-topics" value={editingEvent.topic} onChange={event => setEditingEvent({ ...editingEvent, topic: event.target.value })} /><datalist id="edit-agenda-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Data<select value={editingEvent.day} onChange={event => setEditingEvent({ ...editingEvent, day: Number(event.target.value) })}>{calendarDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select value={editingEvent.type} onChange={event => setEditingEvent({ ...editingEvent, type: event.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="materials">Materiais</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção</option></select></label></div><label className="plain-field">Duração ou volume<input value={editingEvent.meta} onChange={event => setEditingEvent({ ...editingEvent, meta: event.target.value })} /></label></> : <div className="move-event-form"><div><span>{eventLabel(editingEvent.type)}</span><strong>{editingEvent.topic}</strong><small>Data atual: {editingEvent.date?.split("-").reverse().join("/")}</small></div><label>Nova data<select value={editingEvent.day} onChange={event => setEditingEvent({ ...editingEvent, day: Number(event.target.value) })}>{calendarDays.filter(day => day.absolute >= currentDayIndex).map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label></div>}<div className="modal-actions split-actions"><button className="danger-button" onClick={() => { setPendingDeleteEvent(editingEvent); setEditingEvent(null); }}><Trash2 size={15} /> Excluir</button><button className="primary-button" onClick={saveEditedEvent}>{editingIntent === "move" ? <CalendarClock size={16} /> : <Check size={16} />} {editingIntent === "move" ? "Confirmar mudança" : "Salvar alterações"}</button></div></div></div>}
-
-    {pendingDeleteEvent && <div className="modal-backdrop" onMouseDown={() => setPendingDeleteEvent(null)}><div className="modal compact delete-confirm-modal" role="alertdialog" aria-modal="true" aria-label="Confirmar exclusão" onMouseDown={event => event.stopPropagation()}><div className="delete-confirm-icon"><Trash2 size={24} /></div><h2>Excluir “{pendingDeleteEvent.topic}”?</h2><p>{pendingDeleteEvent.type === "theory" ? "Esta aula, o bloco de questões e todas as revisões vinculadas serão removidos. O plano não recriará essas atividades no próximo recálculo." : "Somente este bloco será removido. A exclusão permanecerá salva mesmo após a atualização automática da rota."}</p><div className="modal-actions"><button className="text-button" onClick={() => setPendingDeleteEvent(null)}>Cancelar</button><button className="danger-button solid" onClick={confirmRemoveEvent}><Trash2 size={15} /> Excluir definitivamente</button></div></div></div>}
+    {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><div className="modal compact" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="section-kicker">EDITAR CRONOGRAMA</span><h2>{editingEvent.type === "theory" && editingEvent.lessonId ? "Editar aula e ciclo" : "Alterar bloco"}</h2><p>{editingEvent.type === "theory" && editingEvent.lessonId ? "O novo assunto ou dia será aplicado também às questões e revisões vinculadas." : "Você não fica restrito às sugestões automáticas."}</p></div><button className="icon-button" onClick={() => setEditingEvent(null)}><X size={20} /></button></div><label className="plain-field">Assunto<input list="edit-agenda-topics" value={editingEvent.topic} onChange={event => setEditingEvent({ ...editingEvent, topic: event.target.value })} /><datalist id="edit-agenda-topics">{topicBank.map(topic => <option value={topic.title} key={topic.id} />)}</datalist></label><div className="two-fields"><label>Dia<select value={editingEvent.day} onChange={event => setEditingEvent({ ...editingEvent, day: Number(event.target.value) })}>{calendarDays.map(day => <option value={day.absolute} key={day.iso}>{day.label}, {day.number} {day.month}</option>)}</select></label><label>Tipo<select disabled={editingEvent.type === "theory" && Boolean(editingEvent.lessonId)} value={editingEvent.type} onChange={event => setEditingEvent({ ...editingEvent, type: event.target.value as AgendaEvent["type"] })}><option value="theory">Teoria</option><option value="materials">Materiais</option><option value="questions">Questões</option><option value="review">Revisão</option><option value="cards">Flashcards</option><option value="mock">Prova completa</option><option value="correction">Correção</option></select></label></div><label className="plain-field">Duração ou volume<input value={editingEvent.meta} onChange={event => setEditingEvent({ ...editingEvent, meta: event.target.value })} /></label><div className="modal-actions split-actions"><button className="danger-button" onClick={() => removeEvent(editingEvent.id)}><Trash2 size={15} /> {editingEvent.type === "theory" && editingEvent.lessonId ? "Excluir ciclo" : "Excluir"}</button><button className="primary-button" onClick={saveEditedEvent}><Check size={16} /> Salvar alteração</button></div></div></div>}
   </div>;
 }
 
