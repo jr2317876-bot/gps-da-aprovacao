@@ -1,6 +1,6 @@
 create table if not exists public.profile_states (
   profile_id uuid not null references public.study_profiles(id) on delete cascade,
-  scope text not null check (scope in ('main', 'agenda', 'flashcards')),
+  scope text not null check (scope in ('main', 'agenda', 'flashcards', 'joao_weekly_v1')),
   data jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now(),
   primary key (profile_id, scope)
