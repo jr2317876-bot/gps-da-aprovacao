@@ -510,14 +510,22 @@ export function JoaoWeeklyWorkspace({ view, profileId, setToast, onSaveStatus }:
         const localKey = `gps-joao-weekly-${profileId}`;
         let localData: JoaoState | null = null;
         try { localData = JSON.parse(localStorage.getItem(localKey) ?? "null") as JoaoState | null; } catch { localData = null; }
-        const result = await supabase?.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "joao_weekly_v1").maybeSingle();
+        const [result, legacyResult] = supabase
+          ? await Promise.all([
+              supabase.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "joao_weekly_v1").maybeSingle(),
+              supabase.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "main").maybeSingle(),
+            ])
+          : [undefined, undefined];
         if (cancelled) return;
-        const cloudData = result?.data?.data as JoaoState | undefined;
-        const parsed = (localData?.revision ?? 0) > (cloudData?.revision ?? 0) ? localData! : cloudData ?? localData ?? emptyState();
+        const dedicatedData = result?.data?.data as JoaoState | undefined;
+        const compatibleData = (legacyResult?.data?.data as { joaoWeekly?: JoaoState } | undefined)?.joaoWeekly;
+        const cloudData = (compatibleData?.revision ?? -1) > (dedicatedData?.revision ?? -1) ? compatibleData : dedicatedData;
+        const parsed = (localData?.revision ?? -1) > (cloudData?.revision ?? -1) ? localData! : cloudData ?? localData ?? emptyState();
         setState({ ...emptyState(), ...parsed, weeks: parsed.weeks ?? {}, progress: parsed.progress ?? {}, questionLogs: parsed.questionLogs ?? [], simulations: parsed.simulations ?? [], durationHistory: { ...emptyState().durationHistory, ...(parsed.durationHistory ?? {}) } });
         setHydrated(true);
-        onSaveStatus(result?.error ? "error" : "saved");
-        setSyncError(result?.error ? `A nuvem não pôde ser carregada: ${result.error.message}. A cópia deste aparelho foi mantida.` : "");
+        const loadError = result?.error && legacyResult?.error ? result.error : undefined;
+        onSaveStatus(loadError ? "error" : "saved");
+        setSyncError(loadError ? `A nuvem não pôde ser carregada: ${loadError.message}. A cópia deste aparelho foi mantida.` : "");
       };
       load();
     }, 0);
@@ -533,15 +541,34 @@ export function JoaoWeeklyWorkspace({ view, profileId, setToast, onSaveStatus }:
     if (profileId === "joao") { onSaveStatus("saved"); return; }
     onSaveStatus("saving");
     const client = supabase;
-    saveQueue.current = saveQueue.current.then(async () => {
-      const { error } = await client.from("profile_states").upsert({ profile_id: profileId, scope: "joao_weekly_v1", data: state, updated_at: new Date().toISOString() }, { onConflict: "profile_id,scope" });
+    saveQueue.current = saveQueue.current.catch(() => undefined).then(async () => {
+      const dedicated = await client.from("profile_states").upsert({ profile_id: profileId, scope: "joao_weekly_v1", data: state, updated_at: new Date().toISOString() }, { onConflict: "profile_id,scope" });
+      let error = dedicated.error;
+      if (error) {
+        const existing = await client.from("profile_states").select("data").eq("profile_id", profileId).eq("scope", "main").maybeSingle();
+        if (existing.error) error = existing.error;
+        else {
+          const mainData = existing.data?.data && typeof existing.data.data === "object" ? existing.data.data as Record<string, unknown> : {};
+          const compatible = await client.from("profile_states").upsert({ profile_id: profileId, scope: "main", data: { ...mainData, joaoWeekly: state }, updated_at: new Date().toISOString() }, { onConflict: "profile_id,scope" });
+          error = compatible.error;
+        }
+      }
       onSaveStatus(error ? "error" : "saved");
       if (error) {
         setSyncError(`Falha na nuvem: ${error.message}. Nada foi perdido: a cópia deste aparelho está atualizada.`);
         setToast("A nuvem não respondeu, mas suas alterações ficaram salvas neste aparelho.");
       } else setSyncError("");
+    }).catch(error => {
+      onSaveStatus("error");
+      setSyncError(`Falha na conexão: ${error instanceof Error ? error.message : "tente novamente"}. A cópia deste aparelho está atualizada.`);
     });
   }, [state, hydrated, profileId, onSaveStatus, setToast, syncRevision]);
+
+  useEffect(() => {
+    const retryWhenOnline = () => setSyncRevision(value => value + 1);
+    window.addEventListener("online", retryWhenOnline);
+    return () => window.removeEventListener("online", retryWhenOnline);
+  }, []);
 
   const updateState = useCallback((recipe: (previous: JoaoState) => JoaoState) => setState(previous => {
     const next = recipe(previous);

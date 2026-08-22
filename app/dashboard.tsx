@@ -501,7 +501,13 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   useEffect(() => {
     if (!appReady || !hydrated || loadedMainProfileId !== activeProfileId || !supabase || activeProfileId === "joao") return;
     const client = supabase;
-    const state = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, residencySpecialty, recalculated };
+    const state: Record<string, unknown> = { done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, residencySpecialty, recalculated };
+    if (isJoaoProfile) {
+      try {
+        const weeklyState = JSON.parse(localStorage.getItem(`gps-joao-weekly-${activeProfileId}`) ?? "null");
+        if (weeklyState) state.joaoWeekly = weeklyState;
+      } catch { /* O motor semanal mantém sua própria fila e cópia de segurança. */ }
+    }
     localStorage.setItem(`gps-main-state-${ownerId}-${activeProfileId}`, JSON.stringify(state));
     queueMicrotask(() => setSaveStatus("saving"));
     mainSaveQueue.current = mainSaveQueue.current.then(async () => {
@@ -509,7 +515,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
       if (error) { setSaveStatus("error"); setToast(`Falha ao sincronizar: ${error.message}`); }
       else setSaveStatus("saved");
     });
-  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, residencySpecialty, recalculated, hydrated, loadedMainProfileId, appReady, activeProfileId, ownerId]);
+  }, [done, target, hours, safety, banks, questionLogs, studiedTopics, focusArea, focusPercentage, mockExamCadence, weeklyTopics, mockExams, weeklyLessonGoal, weeklyQuestionGoal, mentorshipCheckins, residencySpecialty, recalculated, hydrated, loadedMainProfileId, appReady, activeProfileId, ownerId, isJoaoProfile]);
 
   useEffect(() => {
     const updateCalendarDay = () => setAppTodayIso(current => {
