@@ -68,6 +68,9 @@ type MatrixTopic = StudyTopic & {
 type TopicProgress = {
   theory: boolean;
   questions: boolean;
+  theoryDate?: string;
+  questionDates?: string[];
+  reviewDates?: string[];
   flashcards: boolean;
   flashcardsRequired: boolean;
   accuracy?: number;
@@ -103,6 +106,7 @@ type WeekTask = {
   completed: boolean;
   manual: boolean;
   order: number;
+  scheduledDate?: string;
 };
 
 type WeekPlan = {
@@ -276,11 +280,12 @@ function deriveReview(accuracy: number, security: number, questionNeed: number, 
 }
 
 function recalculateTopicFromLogs(current: TopicProgress, logs: DetailedQuestionLog[], topicId: string): TopicProgress {
-  const latest = logs.filter(log => log.topicId === topicId).sort((a, b) => b.date.localeCompare(a.date))[0];
-  if (!latest) return { ...current, questions: false, accuracy: undefined, security: undefined, questionNeed: undefined, flashcardNeed: undefined, errorCause: undefined, reviewMode: "Manutenção", reviewStatus: "Em breve", flashcardsRequired: false };
+  const topicLogs = logs.filter(log => log.topicId === topicId).sort((a, b) => b.date.localeCompare(a.date));
+  const latest = topicLogs[0];
+  if (!latest) return { ...current, questions: false, questionDates: [], accuracy: undefined, security: undefined, questionNeed: undefined, flashcardNeed: undefined, errorCause: undefined, reviewMode: "Manutenção", reviewStatus: "Em breve", flashcardsRequired: false };
   const derived = deriveReview(latest.accuracy, latest.security, latest.questionNeed, latest.flashcardNeed, latest.errorCause);
   const flashcardsRequired = latest.reviewMode === "Flashcards" || latest.reviewMode === "Questões + flashcards";
-  return { ...current, questions: true, accuracy: latest.accuracy, security: latest.security, questionNeed: latest.questionNeed, flashcardNeed: latest.flashcardNeed, errorCause: latest.errorCause, reviewMode: latest.reviewMode, reviewStatus: derived.status, flashcardsRequired, lastContact: latest.date };
+  return { ...current, questions: true, questionDates: [...new Set(topicLogs.map(log => log.date))].sort(), accuracy: latest.accuracy, security: latest.security, questionNeed: latest.questionNeed, flashcardNeed: latest.flashcardNeed, errorCause: latest.errorCause, reviewMode: latest.reviewMode, reviewStatus: derived.status, flashcardsRequired, lastContact: latest.date };
 }
 
 function estimateHours(topic: MatrixTopic, history: JoaoState["durationHistory"]) {
@@ -438,7 +443,7 @@ function generateWeek(state: JoaoState, week: WeekPlan): WeekTask[] {
   while (remaining >= 1.25) {
     const candidate = ordered
       .filter(topic => !used.has(topic.id))
-      .sort((a, b) => (areaCounts.get(a.area) ?? 0) - (areaCounts.get(b.area) ?? 0) || ({ P1: 0, P2: 1, P3: 2 }[a.priority] - { P1: 0, P2: 1, P3: 2 }[b.priority]))[0];
+      .sort((a, b) => ({ P1: 0, P2: 1, P3: 2 }[a.priority] - { P1: 0, P2: 1, P3: 2 }[b.priority]) || b.combinedPriority - a.combinedPriority || (areaCounts.get(a.area) ?? 0) - (areaCounts.get(b.area) ?? 0))[0];
     if (!candidate) break;
     const task = createTopicTask(candidate, state, "Residência", tasks.length);
     if (!push(task)) {
@@ -587,7 +592,7 @@ export function JoaoWeeklyWorkspace({ view, profileId, setToast, onSaveStatus }:
   else if (view === "Mentoria") content = <JoaoMentorship {...common} coverage={coverage} status={status} />;
   else if (view === "Questões") content = <JoaoQuestions {...common} />;
   else if (view === "Flashcards") content = <JoaoFlashcardRecommendations state={state} updateState={updateState} setToast={setToast} />;
-  else if (view === "Assuntos") content = <JoaoTopics state={state} updateState={updateState} setToast={setToast} />;
+  else if (view === "Assuntos" || view === "Controle dos assuntos") content = <JoaoTopics state={state} updateState={updateState} setToast={setToast} />;
   else if (view === "Prioridades") content = <JoaoPriorities />;
   else if (view === "Desempenho") content = <JoaoPerformance state={state} coverage={coverage} status={status} />;
   else if (view === "Simulados") content = <JoaoSimulations state={state} updateState={updateState} setToast={setToast} today={today} />;
@@ -609,11 +614,26 @@ function JoaoHeader({ eyebrow, title, text }: { eyebrow: string; title: string; 
   return <div className="joao-page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{text}</p></div><div className="joao-bank-lock"><ShieldCheck size={18} /><span>{JOAO_EXAM_BANKS.map(bank => <strong key={bank.key}>{bank.name} {bank.percent}%</strong>)}</span></div></div>;
 }
 
-function JoaoHome({ currentWeek, coverage, status, state, setSelectedWeek }: CommonProps & { currentWeek: WeekPlan; coverage: number; status: ReturnType<typeof globalStatus> }) {
+function JoaoHome({ currentWeek, coverage, status, state, updateState, setToast, setSelectedWeek, today }: CommonProps & { currentWeek: WeekPlan; coverage: number; status: ReturnType<typeof globalStatus> }) {
+  const [dragged, setDragged] = useState<string | null>(null);
   const completion = weekCompletion(currentWeek.tasks);
   const isPreStart = currentWeek.weekStart < JOAO_START_ISO;
   const completedHours = currentWeek.tasks.reduce((sum, task) => sum + task.estimatedHours * taskProgress(task), 0);
   const nextActions = currentWeek.tasks.filter(task => taskProgress(task) < 1).slice(0, 4);
+  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(currentWeek.weekStart, index));
+  function updateTask(taskId: string, updater: (task: WeekTask) => WeekTask) {
+    updateState(previous => {
+      const base = previous.weeks[currentWeek.weekStart];
+      if (!base) return previous;
+      return { ...previous, weeks: { ...previous.weeks, [currentWeek.weekStart]: { ...base, tasks: base.tasks.map(task => task.id === taskId ? updater(task) : task) } } };
+    });
+  }
+  function scheduleTask(date?: string) {
+    if (!dragged) return;
+    updateTask(dragged, task => ({ ...task, scheduledDate: date }));
+    setDragged(null);
+    setToast(date ? "Agenda da semana atualizada e salva." : "Tarefa devolvida aos itens sem dia definido.");
+  }
   return <div className="joao-stack">
     <JoaoHeader eyebrow="GPS SEMANAL · PERFIL JOÃO" title="Sua decisão de estudo desta semana" text="Metas flexíveis dentro dos 7 dias. Nenhuma tarefa vence por não ser feita em um dia específico." />
     {isPreStart ? <section className="joao-prestart"><CalendarClock size={30} /><div><span>SEMANA LIVRE</span><h2>O plano começa em 24/08/2026</h2><p>A semana atual permanece totalmente em branco e não gera atraso. Na próxima semana, informe suas horas, assuntos da faculdade e obrigações acadêmicas.</p></div><button onClick={() => setSelectedWeek(JOAO_START_ISO)}>Preparar próxima semana <ChevronRight size={16} /></button></section> : null}
@@ -623,12 +643,40 @@ function JoaoHome({ currentWeek, coverage, status, state, setSelectedWeek }: Com
       <JoaoMetric label="Saldo do plano" value={`${state.balanceHours >= 0 ? "+" : ""}${state.balanceHours.toFixed(1)}h`} note={`${Math.abs(state.balanceHours / WEEKLY_REFERENCE_HOURS).toFixed(1)} semana de ${state.balanceHours >= 0 ? "reserva" : "déficit"}`} />
       <JoaoMetric label="Semana" value={currentWeek.generated ? `${completion}%` : "Não gerada"} note={currentWeek.generated ? `${completedHours.toFixed(1)}h de ${currentWeek.hoursAvailable}h` : "aguardando entrada semanal"} />
     </div>
+    <section className="joao-panel joao-home-agenda"><JoaoDailyPlanner week={currentWeek} weekDays={weekDays} today={today} setDragged={setDragged} scheduleTask={scheduleTask} updateTask={updateTask} /></section>
     <section className="joao-panel joao-now"><div className="joao-panel-title"><div><span>O QUE FAZER AGORA</span><h2>{nextActions.length ? "Próximas prioridades da semana" : "Nenhuma tarefa pendente"}</h2><p>A ordem é sugerida, mas você pode reorganizar tudo em “Meu plano”.</p></div></div>{nextActions.length ? <div className="joao-action-list">{nextActions.map(task => <article key={task.id}><b className={task.priority.toLowerCase()}>{task.priority}</b><div><span>{task.source} · {task.area}</span><strong>{task.title}</strong><small>{task.estimatedHours}h · {task.questionGoal}</small></div><em>{Math.round(taskProgress(task) * 100)}%</em></article>)}</div> : <div className="joao-empty"><Check size={24} /><strong>{isPreStart ? "A preparação ainda não começou." : "Semana concluída ou ainda não configurada."}</strong></div>}</section>
   </div>;
 }
 
 function JoaoMetric({ label, value, note, tone = "" }: { label: string; value: string; note: string; tone?: string }) {
   return <article className={`joao-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>;
+}
+
+function JoaoDailyPlanner({ week, weekDays, today, setDragged, scheduleTask, updateTask }: {
+  week: WeekPlan;
+  weekDays: string[];
+  today: string;
+  setDragged: React.Dispatch<React.SetStateAction<string | null>>;
+  scheduleTask: (date?: string) => void;
+  updateTask: (taskId: string, updater: (task: WeekTask) => WeekTask) => void;
+}) {
+  const unscheduled = week.tasks.filter(task => !task.scheduledDate);
+  return <div className="joao-embedded-agenda">
+    <div className="joao-embedded-agenda-title"><div><span>MINHAS TAREFAS · AGENDA ARRASTÁVEL</span><h3>Escolha o que estudar em cada dia</h3><p>Os assuntos gerados aparecem aqui; arraste cada tarefa para segunda, terça, quarta, quinta, sexta, sábado ou domingo.</p></div><strong>{week.tasks.length} tarefas</strong></div>
+    <div className="joao-unscheduled-drop" onDragOver={event => event.preventDefault()} onDrop={() => scheduleTask()}>
+      <strong>Tarefas sem dia definido</strong><span>{unscheduled.length} disponíveis</span>
+      {unscheduled.map(task => <article key={task.id} draggable onDragStart={() => setDragged(task.id)}><GripVertical size={13} /><b className={task.priority.toLowerCase()}>{task.priority}</b><span>{task.title}</span></article>)}
+      {!week.tasks.length && <small>Adicione assuntos da faculdade ou gere a semana para distribuir suas tarefas.</small>}
+    </div>
+    <div className="joao-day-grid">{weekDays.map(date => {
+      const dayTasks = week.tasks.filter(task => task.scheduledDate === date);
+      const dayDate = new Date(`${date}T12:00:00`);
+      return <section className={`joao-day-column ${date === today ? "today" : ""}`} key={date} onDragOver={event => event.preventDefault()} onDrop={() => scheduleTask(date)}>
+        <header><strong>{dayDate.toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "")}</strong><span>{dayDate.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}</span><small>{dayTasks.reduce((sum, task) => sum + task.estimatedHours, 0).toFixed(1)}h</small></header>
+        {dayTasks.length ? dayTasks.map(task => <article key={task.id} draggable onDragStart={() => setDragged(task.id)}><div><GripVertical size={12} /><b className={task.priority.toLowerCase()}>{task.priority}</b></div><strong>{task.title}</strong><small>{task.estimatedHours}h · {task.source}</small><button onClick={() => updateTask(task.id, item => ({ ...item, scheduledDate: undefined }))}><X size={11} /> Remover do dia</button></article>) : <p>Arraste uma tarefa para este dia</p>}
+      </section>;
+    })}</div>
+  </div>;
 }
 
 function JoaoWeekPlan(props: CommonProps) {
@@ -645,6 +693,11 @@ function JoaoWeekPlan(props: CommonProps) {
   const isPreStart = selectedWeek < JOAO_START_ISO;
   const completion = weekCompletion(week.tasks);
   const plannedHours = week.tasks.reduce((sum, task) => sum + task.estimatedHours, 0);
+  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(selectedWeek, index));
+  const bankPrioritiesThisWeek = matrixTopics
+    .filter(topic => !(state.progress[topic.id]?.theory && state.progress[topic.id]?.questions))
+    .sort((a, b) => ({ P1: 0, P2: 1, P3: 2 }[a.priority] - { P1: 0, P2: 1, P3: 2 }[b.priority]) || b.combinedPriority - a.combinedPriority)
+    .slice(0, 8);
 
   function navigateWeek(days: number) {
     const target = addDays(selectedWeek, days);
@@ -665,15 +718,20 @@ function JoaoWeekPlan(props: CommonProps) {
     updateState(previous => {
       const base = previous.weeks[selectedWeek] ?? emptyWeek(selectedWeek);
       const configured = { ...base, hoursAvailable: hoursDraft, obligationType, obligationDate, obligationNote };
-      const tasks = generateWeek(previous, configured);
+      const tasks = generateWeek(previous, configured).map(task => {
+        const existing = base.tasks.find(item => task.topicId ? item.topicId === task.topicId && item.kind === task.kind : item.id === task.id);
+        return existing?.scheduledDate ? { ...task, scheduledDate: existing.scheduledDate } : task;
+      });
       return { ...previous, weeks: { ...previous.weeks, [selectedWeek]: { ...configured, tasks, generated: true, closed: false, completion: weekCompletion(tasks), status: "Em andamento" } } };
     });
     setToast("Semana recalculada dentro do limite de horas, preservando pendências prioritárias e revisões necessárias.");
   }
 
   function addFacultyTopic() {
-    const value = facultyDraft.trim();
-    if (!value) return;
+    if (!facultyDraft.trim()) return setToast("Selecione um assunto existente na base de dados.");
+    const matched = matchFacultyTopic(facultyDraft);
+    if (!matched) return setToast("Selecione um assunto existente na base de dados.");
+    const value = matched.title;
     updateState(previous => {
       const base = previous.weeks[selectedWeek] ?? emptyWeek(selectedWeek);
       if (base.facultyTopics.some(item => normalize(item) === normalize(value))) return previous;
@@ -699,10 +757,12 @@ function JoaoWeekPlan(props: CommonProps) {
   function renameFacultyTopic(value: string) {
     const renamed = window.prompt("Corrija o assunto da faculdade:", value)?.trim();
     if (!renamed || renamed === value) return;
+    const matched = matchFacultyTopic(renamed);
+    if (!matched) return setToast("Selecione um assunto existente na base de dados.");
     updateState(previous => {
       const base = previous.weeks[selectedWeek] ?? emptyWeek(selectedWeek);
-      const tasks = base.tasks.map(task => task.source === "Faculdade" && normalize(task.title) === normalize(value) ? { ...task, title: renamed } : task);
-      return { ...previous, weeks: { ...previous.weeks, [selectedWeek]: { ...base, facultyTopics: base.facultyTopics.map(item => item === value ? renamed : item), tasks, generated: false } } };
+      const tasks = base.tasks.map(task => task.source === "Faculdade" && normalize(task.title) === normalize(value) ? { ...task, title: matched.title, priority: matched.priority } : task);
+      return { ...previous, weeks: { ...previous.weeks, [selectedWeek]: { ...base, facultyTopics: base.facultyTopics.map(item => item === value ? matched.title : item), tasks, generated: false } } };
     });
     setToast("Assunto corrigido. Recalcule a semana para atualizar a integração com a residência.");
   }
@@ -753,7 +813,16 @@ function JoaoWeekPlan(props: CommonProps) {
       let progress = previous.progress;
       if (changed.topicId) {
         const current = progress[changed.topicId] ?? defaultProgress();
-        progress = { ...progress, [changed.topicId]: { ...current, theory: changed.theory, questions: changed.questions, flashcards: changed.flashcards, flashcardsRequired: changed.flashcardsRequired, lastContact: localIso() } };
+        const activityDate = changed.scheduledDate ?? localIso();
+        progress = { ...progress, [changed.topicId]: { ...current, theory: changed.theory, theoryDate: changed.theory ? current.theoryDate ?? activityDate : undefined, questions: changed.questions, questionDates: changed.questions ? [...new Set([...(current.questionDates ?? []), ...(part === "questions" ? [activityDate] : [])])].sort() : [], flashcards: changed.flashcards, flashcardsRequired: changed.flashcardsRequired, lastContact: activityDate } };
+      }
+      if (part === "completed" && changed.completed && changed.kind === "review") {
+        const activityDate = changed.scheduledDate ?? localIso();
+        progress = { ...progress };
+        (changed.linkedTopicIds ?? []).forEach(topicId => {
+          const current = progress[topicId] ?? defaultProgress();
+          progress[topicId] = { ...current, reviewDates: [...(current.reviewDates ?? []), activityDate].sort(), lastContact: activityDate };
+        });
       }
       return { ...previous, progress, weeks: { ...previous.weeks, [selectedWeek]: { ...base, tasks, completion: weekCompletion(tasks), status: "Em andamento", closed: false } } };
     });
@@ -803,9 +872,17 @@ function JoaoWeekPlan(props: CommonProps) {
     setDragged(null);
   }
 
+  function scheduleTask(date?: string) {
+    if (!dragged) return;
+    updateTask(dragged, task => ({ ...task, scheduledDate: date }));
+    setDragged(null);
+    setToast(date ? `Atividade organizada para ${new Date(`${date}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit" })}.` : "Atividade devolvida aos blocos sem dia definido.");
+  }
+
   function saveEdit() {
     if (!editing) return;
-    updateTask(editing.id, () => ({ ...editing, estimatedHours: Math.max(.5, editing.estimatedHours) }));
+    const bankTopic = editing.topicId ? matrixTopics.find(topic => topic.id === editing.topicId) : undefined;
+    updateTask(editing.id, () => ({ ...editing, priority: bankTopic?.priority ?? editing.priority, estimatedHours: Math.max(.5, editing.estimatedHours) }));
     setEditing(null); setToast("Atividade atualizada sem romper o acompanhamento vinculado.");
   }
 
@@ -813,8 +890,23 @@ function JoaoWeekPlan(props: CommonProps) {
     <JoaoHeader eyebrow="MINHA SEMANA" title="Planejamento semanal inteligente" text="As horas são o limite; as tarefas são o resultado. Você escolhe quando executar cada atividade dentro dos 7 dias." />
     <div className="joao-week-nav"><button onClick={() => navigateWeek(-7)}><ArrowLeft size={16} /> Semana anterior</button><div><span>{selectedWeek === mondayOf(today) ? "SEMANA ATUAL" : selectedWeek === JOAO_START_ISO ? "PRIMEIRA SEMANA" : "SEMANA SELECIONADA"}</span><strong>{humanWeek(selectedWeek)}</strong></div><button onClick={() => navigateWeek(7)}>Próxima semana <ArrowRight size={16} /></button></div>
     {isPreStart ? <section className="joao-prestart compact"><CalendarClock size={28} /><div><span>SEMANA LIVRE</span><h2>Nenhuma atividade programada</h2><p>O perfil João começa em 24/08/2026. Esta semana não recebe tarefas, não gera atraso e não consome saldo.</p></div></section> : <>
-      <section className="joao-panel joao-week-setup"><div className="joao-panel-title"><div><span>ENTRADA SEMANAL</span><h2>O que cabe nesta semana?</h2><p>Informe apenas disponibilidade, assuntos da faculdade e eventual obrigação próxima.</p></div><div className="joao-header-actions"><button className="joao-danger" onClick={clearWeek}><Trash2 size={14} /> Excluir semana</button><button className="joao-primary" onClick={saveSetupAndGenerate}><Sparkles size={16} /> {week.generated ? "Recalcular semana" : "Gerar semana"}</button></div></div><div className="joao-setup-grid"><label><span>Horas disponíveis</span><input type="number" min="1" max="100" value={hoursDraft} onChange={event => setHoursDraft(Number(event.target.value))} /><small>Inclui faculdade, residência, questões, revisões e flashcards.</small></label><label><span>Obrigação acadêmica</span><select value={obligationType} onChange={event => setObligationType(event.target.value as ObligationType)}>{(["Nenhuma", "Prova", "Seminário", "Tutoria/PBL/TBL", "Trabalho", "Outra obrigação"] as ObligationType[]).map(item => <option key={item}>{item}</option>)}</select></label><label><span>Data da obrigação</span><input type="date" value={obligationDate} onChange={event => setObligationDate(event.target.value)} disabled={obligationType === "Nenhuma"} /></label><label><span>Observação</span><input value={obligationNote} onChange={event => setObligationNote(event.target.value)} placeholder="Ex.: prova acumulativa" disabled={obligationType === "Nenhuma"} /></label></div><div className="joao-faculty-entry"><div><input value={facultyDraft} onChange={event => setFacultyDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addFacultyTopic(); }} placeholder="Assunto da faculdade nesta semana" /><button onClick={addFacultyTopic}><Plus size={15} /> Adicionar</button></div>{week.facultyTopics.length ? <div className="joao-chips">{week.facultyTopics.map(item => <span key={item}>{item}<button title="Editar" onClick={() => renameFacultyTopic(item)}><Pencil size={11} /></button><button title="Excluir" onClick={() => removeFacultyTopic(item)}><X size={12} /></button></span>)}</div> : <small>Nenhum assunto da faculdade informado.</small>}</div></section>
+      <section className="joao-panel joao-week-setup">
+        <div className="joao-panel-title"><div><span>ENTRADA SEMANAL</span><h2>O que cabe nesta semana?</h2><p>Defina sua disponibilidade, escolha os assuntos da faculdade e organize suas tarefas na agenda abaixo.</p></div><div className="joao-header-actions"><button className="joao-danger" onClick={clearWeek}><Trash2 size={14} /> Excluir semana</button><button className="joao-primary" onClick={saveSetupAndGenerate}><Sparkles size={16} /> {week.generated ? "Recalcular semana" : "Gerar semana"}</button></div></div>
+        <div className="joao-setup-grid">
+          <label><span>Horas disponíveis</span><input type="number" min="1" max="100" value={hoursDraft} onChange={event => setHoursDraft(Number(event.target.value))} /><small>Inclui faculdade, residência, questões, revisões e flashcards.</small></label>
+          <label><span>Obrigação acadêmica</span><select value={obligationType} onChange={event => setObligationType(event.target.value as ObligationType)}>{(["Nenhuma", "Prova", "Seminário", "Tutoria/PBL/TBL", "Trabalho", "Outra obrigação"] as ObligationType[]).map(item => <option key={item}>{item}</option>)}</select></label>
+          <label><span>Data da obrigação</span><input type="date" value={obligationDate} onChange={event => setObligationDate(event.target.value)} disabled={obligationType === "Nenhuma"} /></label>
+          <label><span>Observação</span><input value={obligationNote} onChange={event => setObligationNote(event.target.value)} placeholder="Ex.: prova acumulativa" disabled={obligationType === "Nenhuma"} /></label>
+        </div>
+        <div className="joao-faculty-entry joao-faculty-inside-setup">
+          <label className="joao-faculty-label"><span>ASSUNTOS DA FACULDADE NESTA SEMANA</span><select value={facultyDraft} onChange={event => setFacultyDraft(event.target.value)}><option value="">Selecione um assunto cadastrado na base</option>{AREAS.map(studyArea => <optgroup key={studyArea} label={studyArea}>{matrixTopics.filter(topic => topic.area === studyArea).map(topic => <option key={topic.id} value={topic.title}>{topic.title} · {topic.priority} nas bancas</option>)}</optgroup>)}</select></label>
+          <button className="joao-faculty-add" onClick={addFacultyTopic}><Plus size={15} /> Adicionar assunto da faculdade</button>
+          {week.facultyTopics.length ? <div className="joao-chips">{week.facultyTopics.map(item => { const matched = matchFacultyTopic(item); return <span key={item}>{item}{matched && <b className={matched.priority.toLowerCase()}>{matched.priority} bancas</b>}<button title="Editar" onClick={() => renameFacultyTopic(item)}><Pencil size={11} /></button><button title="Excluir" onClick={() => removeFacultyTopic(item)}><X size={12} /></button></span>; })}</div> : <small>Nenhum assunto da faculdade foi escolhido ainda.</small>}
+        </div>
+        <JoaoDailyPlanner week={week} weekDays={weekDays} today={today} setDragged={setDragged} scheduleTask={scheduleTask} updateTask={updateTask} />
+      </section>
       <div className="joao-week-summary"><span><Clock3 size={16} /><b>{plannedHours.toFixed(1)}h</b> planejadas de <b>{week.hoursAvailable}h</b></span><span><Gauge size={16} /><b>{completion}%</b> concluído</span><span><TrendingUp size={16} /><b>{week.tasks.filter(task => task.priority === "P1").length}</b> prioridades P1</span><span><ShieldCheck size={16} />{isHeavyObligation(week) ? "Semana acadêmica pesada: manutenção da residência protegida" : "Carga dinâmica faculdade + residência"}</span></div>
+      <section className="joao-panel joao-weekly-bank-priorities"><div className="joao-panel-title"><div><span>PRIORIDADES DAS BANCAS NESTA SEMANA</span><h2>IAMSPE 40% · SES-PE 30% · USP-SP 30%</h2><p>Classificação pela cobrança histórica das provas, independente dos assuntos informados na faculdade.</p></div></div><div className="joao-priority-grid">{bankPrioritiesThisWeek.map(topic => <article key={topic.id}><b className={topic.priority.toLowerCase()}>{topic.priority}</b><div><span>{topic.area} · {topic.subarea}</span><strong>{topic.title}</strong><small>IAMSPE {topic.iamspeYears}/6 · SES-PE {topic.sesYears}/6 · USP-SP {topic.uspYears}/6</small><small>Prioridade ponderada das bancas: {topic.combinedPriority.toFixed(1)}</small></div></article>)}</div></section>
       <section className="joao-panel"><div className="joao-panel-title"><div><span>TAREFAS SELECIONADAS</span><h2>{week.tasks.length ? `${week.tasks.length} blocos flexíveis` : "Aguardando geração"}</h2><p>Arraste para mudar a ordem. Assuntos grandes permanecem como uma única unidade visual.</p></div><div className="joao-add-topic"><input list="joao-topic-list" value={topicDraft} onChange={event => setTopicDraft(event.target.value)} placeholder="Adicionar assunto" /><datalist id="joao-topic-list">{matrixTopics.map(topic => <option value={topic.title} key={topic.id} />)}</datalist><button onClick={addTopic}><Plus size={15} /> Incluir</button></div></div>{week.tasks.length ? <div className="joao-task-list">{week.tasks.map(task => <article className={`joao-week-task ${taskProgress(task) === 1 ? "done" : ""}`} key={task.id} draggable onDragStart={() => setDragged(task.id)} onDragOver={event => event.preventDefault()} onDrop={() => moveTask(task.id)}><GripVertical className="joao-grip" size={18} /><b className={task.priority.toLowerCase()}>{task.priority}</b><div className="joao-task-copy"><span>{task.source} · {task.area} · {task.subarea}</span><strong>{task.title}</strong><small>{task.estimatedHours}h estimadas · {task.questionGoal}</small>{task.kind === "topic" || task.kind === "faculty" ? <div className="joao-checks"><button className={task.theory ? "checked" : ""} onClick={() => togglePart(task, "theory")}><Check size={13} /> Base teórica</button>{task.source !== "Faculdade" && <button className={task.questions ? "checked" : ""} onClick={() => togglePart(task, "questions")}><Check size={13} /> Questões iniciais</button>}{task.flashcardsRequired && <button className={task.flashcards ? "checked" : ""} onClick={() => togglePart(task, "flashcards")}><Check size={13} /> Flashcards dos erros</button>}</div> : <div className="joao-checks"><button className={task.completed ? "checked" : ""} onClick={() => togglePart(task, "completed")}><Check size={13} /> Concluir bloco</button></div>}</div><div className="joao-task-side"><strong>{Math.round(taskProgress(task) * 100)}%</strong><label>Tempo real<input type="number" min="0" step=".5" value={task.actualHours ?? ""} onChange={event => updateTask(task.id, item => ({ ...item, actualHours: Number(event.target.value), durationLearned: false }))} onBlur={() => learnDuration(task.id)} placeholder="h" /></label><div><button onClick={() => setEditing(task)}><Pencil size={14} /> Editar</button><button className="delete" onClick={() => removeTask(task)}><Trash2 size={14} /> Excluir</button></div></div></article>)}</div> : <div className="joao-empty"><Sparkles size={24} /><strong>Configure e gere a semana para receber uma seleção inteligente.</strong></div>}</section>
     </>}
     {editing && <div className="joao-modal-backdrop" onMouseDown={() => setEditing(null)}><div className="joao-modal" onMouseDown={event => event.stopPropagation()}><header><div><span>EDITAR ATIVIDADE</span><h2>{editing.title}</h2></div><button onClick={() => setEditing(null)}><X size={18} /></button></header><label>Título<input value={editing.title} onChange={event => setEditing({ ...editing, title: event.target.value })} /></label><div className="joao-modal-grid"><label>Grande área<select value={editing.area} onChange={event => setEditing({ ...editing, area: event.target.value as StudyTopic["area"] })}>{AREAS.map(item => <option key={item}>{item}</option>)}</select></label><label>Subárea<input value={editing.subarea} onChange={event => setEditing({ ...editing, subarea: event.target.value })} /></label><label>Origem<select value={editing.source} onChange={event => setEditing({ ...editing, source: event.target.value as TaskSource })}><option>Residência</option><option>Faculdade</option><option>Faculdade + Residência</option></select></label><label>Horas estimadas<input type="number" min=".5" step=".5" value={editing.estimatedHours} onChange={event => setEditing({ ...editing, estimatedHours: Number(event.target.value) })} /></label><label>Meta de questões<input value={editing.questionGoal} onChange={event => setEditing({ ...editing, questionGoal: event.target.value })} /></label><label>Prioridade<select value={editing.priority} onChange={event => setEditing({ ...editing, priority: event.target.value as Priority })}><option>P1</option><option>P2</option><option>P3</option></select></label><label>Revisão<select value={editing.reviewMode} onChange={event => setEditing({ ...editing, reviewMode: event.target.value as ReviewMode })}>{["Questões", "Flashcards", "Questões + flashcards", "Manutenção"].map(item => <option key={item}>{item}</option>)}</select></label></div><footer><button onClick={() => setEditing(null)}>Cancelar</button><button className="joao-primary" onClick={saveEdit}><Check size={15} /> Salvar</button></footer></div></div>}
@@ -921,8 +1013,52 @@ function JoaoFlashcardRecommendations({ state, updateState, setToast }: { state:
 function JoaoTopics({ state, updateState, setToast }: { state: JoaoState; updateState: (recipe: (previous: JoaoState) => JoaoState) => void; setToast: (message: string) => void }) {
   const [search, setSearch] = useState("");
   const [area, setArea] = useState<"Todas" | StudyTopic["area"]>("Todas");
-  const filtered = matrixTopics.filter(topic => (area === "Todas" || topic.area === area) && (!search.trim() || normalize(topic.title).includes(normalize(search))));
-  function toggleTheory(topic: MatrixTopic) { updateState(previous => { const current = previous.progress[topic.id] ?? defaultProgress(); return { ...previous, progress: { ...previous.progress, [topic.id]: { ...current, theory: !current.theory, lastContact: localIso() } } }; }); setToast("Status da base teórica atualizado sem reiniciar outras etapas."); }
+  const [stage, setStage] = useState<"Todos" | "Não estudados" | "Estudados" | "Com questões" | "1 revisão" | "2+ revisões">("Todos");
+  const [activityDates, setActivityDates] = useState<Record<string, string>>({});
+  const filtered = matrixTopics.filter(topic => {
+    const progress = state.progress[topic.id] ?? defaultProgress();
+    const reviews = progress.reviewDates?.length ?? 0;
+    const matchesStage = stage === "Todos" || (stage === "Não estudados" && !progress.theory) || (stage === "Estudados" && progress.theory) || (stage === "Com questões" && progress.questions) || (stage === "1 revisão" && reviews === 1) || (stage === "2+ revisões" && reviews >= 2);
+    return (area === "Todas" || topic.area === area) && matchesStage && (!search.trim() || normalize(topic.title).includes(normalize(search)));
+  });
+  const activityDate = (topicId: string) => activityDates[topicId] || localIso();
+  function toggleTheory(topic: MatrixTopic) {
+    const date = activityDate(topic.id);
+    updateState(previous => {
+      const current = previous.progress[topic.id] ?? defaultProgress();
+      const theory = !current.theory;
+      const progress = { ...current, theory, theoryDate: theory ? date : undefined, lastContact: date };
+      const weeks = Object.fromEntries(Object.entries(previous.weeks).map(([key, week]) => [key, { ...week, tasks: week.tasks.map(task => task.topicId === topic.id ? { ...task, theory } : task) }]));
+      return { ...previous, progress: { ...previous.progress, [topic.id]: progress }, weeks };
+    });
+    setToast("Teoria atualizada com a data informada, sem reiniciar as demais etapas.");
+  }
+  function toggleQuestions(topic: MatrixTopic) {
+    const date = activityDate(topic.id);
+    updateState(previous => {
+      const current = previous.progress[topic.id] ?? defaultProgress();
+      const questions = !current.questions;
+      const progress = { ...current, questions, questionDates: questions ? [...new Set([...(current.questionDates ?? []), date])].sort() : [], lastContact: date };
+      const weeks = Object.fromEntries(Object.entries(previous.weeks).map(([key, week]) => [key, { ...week, tasks: week.tasks.map(task => task.topicId === topic.id ? { ...task, questions } : task) }]));
+      return { ...previous, progress: { ...previous.progress, [topic.id]: progress }, weeks };
+    });
+    setToast("Etapa de questões atualizada com a data escolhida.");
+  }
+  function registerReview(topic: MatrixTopic) {
+    const date = activityDate(topic.id);
+    updateState(previous => {
+      const current = previous.progress[topic.id] ?? defaultProgress();
+      return { ...previous, progress: { ...previous.progress, [topic.id]: { ...current, reviewDates: [...(current.reviewDates ?? []), date].sort(), reviewStatus: "Consolidado", lastContact: date } } };
+    });
+    setToast(`${(state.progress[topic.id]?.reviewDates?.length ?? 0) + 1}ª revisão registrada em ${date.split("-").reverse().join("/")}.`);
+  }
+  function removeReview(topic: MatrixTopic, index: number) {
+    updateState(previous => {
+      const current = previous.progress[topic.id] ?? defaultProgress();
+      return { ...previous, progress: { ...previous.progress, [topic.id]: { ...current, reviewDates: (current.reviewDates ?? []).filter((_, position) => position !== index) } } };
+    });
+    setToast("Registro de revisão removido sem alterar as demais etapas.");
+  }
   function editTracking(topic: MatrixTopic) {
     const current = state.progress[topic.id] ?? defaultProgress();
     const reviewMode = window.prompt("Modo de revisão: Questões, Flashcards, Questões + flashcards ou Manutenção", current.reviewMode);
@@ -958,7 +1094,25 @@ function JoaoTopics({ state, updateState, setToast }: { state: JoaoState; update
     });
     setToast("Dados do assunto excluídos sem deixar revisões órfãs.");
   }
-  return <div className="joao-stack"><JoaoHeader eyebrow="MATRIZ IAMSPE · SES-PE · USP-SP" title={`${matrixTopics.length} assuntos organizados por retorno`} text="Todos começaram como não estudados. Cada tema permanece uma unidade, mesmo quando exige várias sessões." /><section className="joao-panel"><div className="joao-topic-toolbar"><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar assunto, área ou subárea" /><div>{(["Todas", ...AREAS] as const).map(item => <button className={area === item ? "active" : ""} key={item} onClick={() => setArea(item)}>{item}</button>)}</div></div><div className="joao-matrix-head"><span>{filtered.length} assuntos</span><small>IAMSPE 40% · SES-PE 30% · USP-SP 30% · cadernos 2021–2026</small></div><div className="joao-matrix">{filtered.map(topic => { const progress = state.progress[topic.id] ?? defaultProgress(); return <article key={topic.id}><b className={topic.priority.toLowerCase()}>{topic.priority}</b><div><span>{topic.area} · {topic.subarea}</span><strong>{topic.title}</strong><small>{topic.size} · IAMSPE {topic.iamspeYears ? `${topic.iamspeYears}/6` : "base"} · SES-PE {topic.sesYears ? `${topic.sesYears}/6` : "base"} · USP-SP {topic.uspYears ? `${topic.uspYears}/6` : "base"}{topic.update2028 ? " · atualizar diretriz em 2028" : ""}</small></div><div className="joao-mini-stages"><span className={progress.theory ? "done" : ""}>Teoria</span><span className={progress.questions ? "done" : ""}>Questões</span><span className={progress.flashcardsRequired ? progress.flashcards ? "done" : "needed" : "optional"}>Flashcards</span></div><em className={progress.reviewStatus.toLocaleLowerCase("pt-BR").replace(" ", "-")}>{progress.reviewStatus}</em><div className="joao-matrix-actions"><button onClick={() => toggleTheory(topic)}>{progress.theory ? "Desmarcar teoria" : "Concluir teoria"}</button><button onClick={() => editTracking(topic)}><Pencil size={12} /> Editar</button><button className="delete" onClick={() => resetTracking(topic)}><Trash2 size={12} /> Excluir dados</button></div></article>; })}</div></section></div>;
+  const studiedCount = matrixTopics.filter(topic => state.progress[topic.id]?.theory).length;
+  const questionCount = matrixTopics.filter(topic => state.progress[topic.id]?.questions).length;
+  const reviewedCount = matrixTopics.filter(topic => (state.progress[topic.id]?.reviewDates?.length ?? 0) > 0).length;
+  return <div className="joao-stack">
+    <JoaoHeader eyebrow="CONTROLE DOS ASSUNTOS · HISTÓRICO COMPLETO" title={`${matrixTopics.length} assuntos organizados pelas bancas`} text="Registre teoria, questões e quantas revisões forem necessárias, sempre com a data de cada atividade." />
+    <div className="joao-metrics"><JoaoMetric label="Assuntos estudados" value={String(studiedCount)} note={`de ${matrixTopics.length} assuntos cadastrados`} /><JoaoMetric label="Com questões realizadas" value={String(questionCount)} note="etapa independente da teoria" /><JoaoMetric label="Com revisões registradas" value={String(reviewedCount)} note="1ª, 2ª, 3ª revisão e seguintes" /><JoaoMetric label="Revisões realizadas" value={String(Object.values(state.progress).reduce((sum, progress) => sum + (progress.reviewDates?.length ?? 0), 0))} note="todas as datas ficam salvas" /></div>
+    <section className="joao-panel"><div className="joao-topic-toolbar"><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar assunto, área ou subárea" /><div>{(["Todas", ...AREAS] as const).map(item => <button className={area === item ? "active" : ""} key={item} onClick={() => setArea(item)}>{item}</button>)}</div></div>
+      <div className="joao-stage-filters">{(["Todos", "Não estudados", "Estudados", "Com questões", "1 revisão", "2+ revisões"] as const).map(item => <button className={stage === item ? "active" : ""} key={item} onClick={() => setStage(item)}>{item}</button>)}</div>
+      <div className="joao-matrix-head"><span>{filtered.length} assuntos</span><small>Prioridade das bancas: IAMSPE 40% · SES-PE 30% · USP-SP 30%</small></div>
+      <div className="joao-matrix joao-history-matrix">{filtered.map(topic => {
+        const progress = state.progress[topic.id] ?? defaultProgress();
+        const reviewDates = progress.reviewDates ?? [];
+        return <article key={topic.id}><div className="joao-history-topic"><b className={topic.priority.toLowerCase()}>{topic.priority}</b><div><span>{topic.area} · {topic.subarea}</span><strong>{topic.title}</strong><small>Prioridade da banca · IAMSPE {topic.iamspeYears}/6 · SES-PE {topic.sesYears}/6 · USP-SP {topic.uspYears}/6</small></div><em className={progress.reviewStatus.toLocaleLowerCase("pt-BR").replace(" ", "-")}>{progress.reviewStatus}</em></div>
+          <div className="joao-activity-history"><div className={`joao-activity-stage ${progress.theory ? "done" : ""}`}><strong>Teoria</strong><span>{progress.theory ? "Estudado" : "Não estudado"}</span><small>{progress.theoryDate ? progress.theoryDate.split("-").reverse().join("/") : "Sem data"}</small></div><div className={`joao-activity-stage ${progress.questions ? "done" : ""}`}><strong>Questões</strong><span>{progress.questions ? "Realizadas" : "Pendentes"}</span><small>{progress.questionDates?.length ? progress.questionDates.map(date => date.split("-").reverse().join("/")).join(" · ") : "Sem data"}</small></div>{reviewDates.map((date, index) => <div className="joao-activity-stage done review" key={`${date}-${index}`}><strong>{index + 1}ª revisão</strong><span>Realizada</span><small>{date.split("-").reverse().join("/")}</small><button onClick={() => removeReview(topic, index)} title="Excluir esta revisão"><X size={11} /></button></div>)}{!reviewDates.length && <div className="joao-activity-stage"><strong>Revisões</strong><span>Nenhuma registrada</span><small>Adicione quando realizar</small></div>}</div>
+          <div className="joao-history-actions"><label>Data da atividade<input type="date" value={activityDate(topic.id)} onChange={event => setActivityDates(previous => ({ ...previous, [topic.id]: event.target.value }))} /></label><button onClick={() => toggleTheory(topic)}><Check size={12} /> {progress.theory ? "Desmarcar teoria" : "Marcar teoria"}</button><button onClick={() => toggleQuestions(topic)}><Check size={12} /> {progress.questions ? "Desmarcar questões" : "Marcar questões"}</button><button className="review" onClick={() => registerReview(topic)}><Plus size={12} /> {reviewDates.length + 1}ª revisão</button><button onClick={() => editTracking(topic)}><Pencil size={12} /> Editar</button><button className="delete" onClick={() => resetTracking(topic)}><Trash2 size={12} /> Excluir dados</button></div>
+        </article>;
+      })}</div>
+    </section>
+  </div>;
 }
 
 function JoaoPriorities() {
@@ -1048,7 +1202,21 @@ function JoaoReviews({ state, updateState, setToast }: { state: JoaoState; updat
     });
     setToast("Indicação removida sem apagar o histórico de desempenho.");
   }
-  return <div className="joao-stack"><JoaoHeader eyebrow="REVISÕES" title="Revisões agrupadas por área" text="A semana não será poluída por dezenas de revisões isoladas. O GPS seleciona internamente os temas com maior necessidade." /><section className="joao-panel">{ordered.length ? <div className="joao-grouped-reviews">{ordered.map(([key, topics]) => { const [area, subarea] = key.split("|"); const urgent = topics.filter(topic => state.progress[topic.id]?.reviewStatus === "Urgente"); const priority = urgent.length ? urgent : topics.filter(topic => state.progress[topic.id]?.reviewStatus === "Em breve"); const modes = [...new Set(priority.map(topic => state.progress[topic.id]?.reviewMode))]; return <article key={key}><header><div><span>{area}</span><h2>Revisão — {subarea}</h2></div><b className={urgent.length ? "urgent" : "soon"}>{urgent.length ? "Urgente" : "Em breve"}</b></header><p><strong>Priorizar:</strong> {priority.slice(0, 4).map(topic => topic.title).join(" · ") || "manutenção dos temas consolidados"}</p><div><span>Meta sugerida: <b>{urgent.length ? "20–30 questões" : "15–20 questões"}</b></span><span>Modo: <b>{modes.join(" + ") || "Manutenção"}</b></span><span>Tempo: <b>1h30 editável</b></span></div><div className="joao-inline-actions"><button onClick={() => editGroup(topics)}><Pencil size={13} /> Editar</button><button className="delete" onClick={() => removeGroup(topics)}><Trash2 size={13} /> Remover</button></div></article>; })}</div> : <div className="joao-empty"><CalendarClock size={24} /><strong>Nenhuma revisão gerada.</strong><p>As recomendações surgem depois da teoria e dos primeiros blocos de questões.</p></div>}</section></div>;
+  function completeGroup(topics: MatrixTopic[]) {
+    const date = window.prompt("Data da revisão (AAAA-MM-DD):", localIso());
+    if (!date) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return setToast("Informe uma data no formato AAAA-MM-DD.");
+    updateState(previous => {
+      const progress = { ...previous.progress };
+      topics.forEach(topic => {
+        const current = progress[topic.id] ?? defaultProgress();
+        progress[topic.id] = { ...current, reviewDates: [...(current.reviewDates ?? []), date].sort(), reviewStatus: "Consolidado", lastContact: date };
+      });
+      return { ...previous, progress };
+    });
+    setToast(`Revisão de ${topics.length} assunto(s) registrada em ${date.split("-").reverse().join("/")}.`);
+  }
+  return <div className="joao-stack"><JoaoHeader eyebrow="REVISÕES" title="Revisões agrupadas por área" text="Cada revisão concluída registra sua data e atualiza automaticamente a 1ª, 2ª, 3ª revisão e as seguintes de cada assunto." /><section className="joao-panel">{ordered.length ? <div className="joao-grouped-reviews">{ordered.map(([key, topics]) => { const [area, subarea] = key.split("|"); const urgent = topics.filter(topic => state.progress[topic.id]?.reviewStatus === "Urgente"); const priority = urgent.length ? urgent : topics.filter(topic => state.progress[topic.id]?.reviewStatus === "Em breve"); const modes = [...new Set(priority.map(topic => state.progress[topic.id]?.reviewMode))]; return <article key={key}><header><div><span>{area}</span><h2>Revisão — {subarea}</h2></div><b className={urgent.length ? "urgent" : "soon"}>{urgent.length ? "Urgente" : "Em breve"}</b></header><p><strong>Priorizar:</strong> {priority.slice(0, 4).map(topic => topic.title).join(" · ") || "manutenção dos temas consolidados"}</p><div><span>Meta sugerida: <b>{urgent.length ? "20–30 questões" : "15–20 questões"}</b></span><span>Modo: <b>{modes.join(" + ") || "Manutenção"}</b></span><span>Tempo: <b>1h30 editável</b></span></div><div className="joao-inline-actions"><button onClick={() => completeGroup(topics)}><Check size={13} /> Registrar revisão</button><button onClick={() => editGroup(topics)}><Pencil size={13} /> Editar</button><button className="delete" onClick={() => removeGroup(topics)}><Trash2 size={13} /> Remover</button></div></article>; })}</div> : <div className="joao-empty"><CalendarClock size={24} /><strong>Nenhuma revisão gerada.</strong><p>As recomendações surgem depois da teoria e dos primeiros blocos de questões.</p></div>}</section></div>;
 }
 
 function JoaoGoals({ coverage, status, state }: { coverage: number; status: ReturnType<typeof globalStatus>; state: JoaoState }) {

@@ -424,7 +424,9 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
   const agendaHomeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const activeProfile = profiles.find(profile => profile.id === activeProfileId) ?? profiles[0] ?? DEFAULT_PROFILES[0];
   const isJoaoProfile = ["joão", "joao"].includes(activeProfile.name.trim().toLocaleLowerCase("pt-BR"));
-  const visibleNav = isJoaoProfile ? [...nav.slice(0, 2), ["Plano Mestre", Gauge] as const, ...nav.slice(2)] : nav;
+  const visibleNav = isJoaoProfile
+    ? [...nav.slice(0, 2), ["Controle dos assuntos", LibraryBig] as const, ["Plano Mestre", Gauge] as const, ...nav.slice(2)]
+    : nav;
   const handleAgendaChange = useCallback((events: AgendaEvent[], rotation: RotationState, suggestionKey: string) => {
     setAgendaPreview(events); setAgendaRotation(rotation); setAgendaSuggestionKey(suggestionKey); setAgendaPreviewProfileId(activeProfileId);
   }, [activeProfileId]);
@@ -741,6 +743,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
     "Flashcards": "Flashcards do dia",
     "Questões": "Registro de questões",
     "Assuntos": "Banco de assuntos",
+    "Controle dos assuntos": "Histórico detalhado de cada assunto",
     "Prioridades": "O que mais cai em cada banca",
     "Desempenho": "Desempenho e prioridades",
     "Simulados": "Simulados completos",
