@@ -757,7 +757,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
         <div className="exam-mini">
           <div className="exam-icon"><Flag size={18} /></div>
           {isJoaoProfile
-            ? <div><small>OBJETIVO DO JOÃO</small><strong>IAMSPE + SES-PE</strong><span>pesos fixos 50/50</span></div>
+            ? <div><small>OBJETIVO DO JOÃO</small><strong>IAMSPE · SES-PE · USP-SP</strong><span>pesos fixos 40% · 30% · 30%</span></div>
             : <div><small>PRÓXIMA PROVA</small><strong>Não configurada</strong><span>Escolher banca e data</span></div>}
         </div>
         <button className="nav-settings"><Settings size={19} /> Configurações</button>
@@ -779,7 +779,7 @@ export default function Dashboard({ ownerId }: { ownerId: string }) {
 
         <main className="content">
           {isJoaoProfile ? (
-            active === "Hospitais" ? <section className="secondary-page"><div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO · PERFIL JOÃO</p><h1>{sectionTitle[active]}</h1><p>Referências hospitalares preservadas, sem alterar o motor semanal exclusivo IAMSPE + SES-PE.</p></div></div><ResidencyProgramsPage specialty={residencySpecialty} setSpecialty={setResidencySpecialty} /></section> : <JoaoWeeklyWorkspace view={active} profileId={activeProfileId} setToast={setToast} onSaveStatus={setSaveStatus} />
+            active === "Hospitais" ? <section className="secondary-page"><div className="secondary-head"><div><p className="eyebrow">GPS DA APROVAÇÃO · PERFIL JOÃO</p><h1>{sectionTitle[active]}</h1><p>Referências hospitalares preservadas, com rota exclusiva IAMSPE 40%, SES-PE 30% e USP-SP 30%.</p></div></div><ResidencyProgramsPage specialty={residencySpecialty} setSpecialty={setResidencySpecialty} /></section> : <JoaoWeeklyWorkspace view={active} profileId={activeProfileId} setToast={setToast} onSaveStatus={setSaveStatus} />
           ) : active === "Hoje" ? (
             <>
               <section className="welcome-row">

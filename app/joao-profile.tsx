@@ -26,6 +26,14 @@ import {
   X,
 } from "lucide-react";
 import { bankPriorities, topicBank, type StudyTopic } from "./topics";
+import {
+  JOAO_EXAM_BANKS,
+  JOAO_EXAM_SOURCES,
+  JOAO_SUPPLEMENTARY_EXAM,
+  joaoThemeHistory,
+  type JoaoBankKey,
+  type JoaoExamName,
+} from "./joao-exam-history";
 import { supabase } from "@/lib/supabase";
 
 const JOAO_START_ISO = "2026-08-24";
@@ -48,6 +56,10 @@ type MatrixTopic = StudyTopic & {
   priority: Priority;
   iamspePriority: number;
   sesPriority: number;
+  uspPriority: number;
+  iamspeYears: number;
+  sesYears: number;
+  uspYears: number;
   combinedPriority: number;
   size: TopicSize;
   update2028: boolean;
@@ -126,7 +138,7 @@ type DetailedQuestionLog = {
 type SimulationLog = {
   id: string;
   date: string;
-  bank: "IAMSPE" | "SES-PE";
+  bank: JoaoExamName;
   questions: number;
   accuracy: number;
 };
@@ -207,20 +219,46 @@ function inferSize(topic: StudyTopic): TopicSize {
   return "Pequeno";
 }
 
-function priorityPosition(bankKey: "iamspe" | "sespe", title: string) {
+function priorityPosition(bankKey: JoaoBankKey, title: string) {
   const bank = bankPriorities.find(item => item.key === bankKey);
   const index = bank?.topics.findIndex(item => normalize(item) === normalize(title)) ?? -1;
   return index < 0 ? 0 : 10 - index;
 }
 
-const matrixTopics: MatrixTopic[] = topicBank.map((topic, index) => {
-  const iamspePriority = priorityPosition("iamspe", topic.title);
-  const sesPriority = priorityPosition("sespe", topic.title);
-  const combinedPriority = (iamspePriority + sesPriority) / 2;
-  const recurrent = iamspePriority > 0 || sesPriority > 0;
-  const priority: Priority = combinedPriority >= 5 || (recurrent && Math.max(iamspePriority, sesPriority) >= 7) ? "P1" : recurrent || index % 3 !== 2 ? "P2" : "P3";
+function historicalPriority(bankKey: JoaoBankKey, topic: StudyTopic) {
+  const years = joaoThemeHistory(topic)?.years[bankKey].length ?? 0;
+  const position = priorityPosition(bankKey, topic.title);
+  return { years, score: Math.round((years / 6 * 7 + position / 10 * 3) * 100) / 100 };
+}
+
+const matrixTopics: MatrixTopic[] = topicBank.map(topic => {
+  const iamspe = historicalPriority("iamspe", topic);
+  const ses = historicalPriority("sespe", topic);
+  const usp = historicalPriority("uspsp", topic);
+  const combinedPriority = iamspe.score * 0.4 + ses.score * 0.3 + usp.score * 0.3;
+  const recurringYears = iamspe.years * 0.4 + ses.years * 0.3 + usp.years * 0.3;
+  const rankedByBank = Math.max(iamspe.score, ses.score, usp.score);
+  const foundational = /sindromes|doencas|infecc|tumores|sangramento|gesta|parto|trauma|estudos|vigilancia|prevencao|etica|imuniz|nutric|neonatal|pneumo|cardio/.test(normalize(topic.title));
+  const priority: Priority = combinedPriority >= 6 || (recurringYears >= 4.5 && rankedByBank >= 8)
+    ? "P1"
+    : recurringYears >= 2 || rankedByBank >= 2.1 || foundational
+      ? "P2"
+      : "P3";
   const update2028 = /hipertens|diabetes|imuniz|rastreamento|pre-natal|abcde|vigilancia|atencao primaria|etica|trauma|pneumonia|sepse/.test(normalize(topic.title));
-  return { ...topic, subarea: inferSubarea(topic), priority, iamspePriority, sesPriority, combinedPriority, size: inferSize(topic), update2028 };
+  return {
+    ...topic,
+    subarea: inferSubarea(topic),
+    priority,
+    iamspePriority: iamspe.score,
+    sesPriority: ses.score,
+    uspPriority: usp.score,
+    iamspeYears: iamspe.years,
+    sesYears: ses.years,
+    uspYears: usp.years,
+    combinedPriority,
+    size: inferSize(topic),
+    update2028,
+  };
 });
 
 function defaultProgress(): TopicProgress {
@@ -346,7 +384,7 @@ function generateWeek(state: JoaoState, week: WeekPlan): WeekTask[] {
     updates.forEach(topic => push({ ...createTopicTask(topic, state, "Residência", tasks.length), id: `update-${topic.id}-${week.weekStart}`, kind: "update", title: `Atualizar diretriz vigente — ${topic.title}`, estimatedHours: 1, completed: false }));
     const weakest = Object.entries(state.progress).filter(([, item]) => (item.accuracy ?? 100) < 75).sort((a, b) => (a[1].accuracy ?? 100) - (b[1].accuracy ?? 100)).slice(0, 3);
     weakest.forEach(([id]) => { const topic = matrixTopics.find(item => item.id === id); if (topic) push({ ...createTopicTask(topic, state, "Residência", tasks.length), id: `weak-${topic.id}-${week.weekStart}`, kind: "review", title: `Revisão dirigida — ${topic.subarea}`, linkedTopicIds: [topic.id], estimatedHours: 1.5, questionGoal: "30–40 questões", completed: false }); });
-    if (remaining >= 1) push({ id: `sim-${week.weekStart}`, kind: "simulation", title: "Prova antiga ou simulado completo", area: "Preventiva", subarea: "IAMSPE / SES-PE", priority: "P1", source: "Residência", estimatedHours: Math.min(4, remaining), theory: false, questions: false, flashcards: false, flashcardsRequired: false, questionGoal: "Prova completa em condições reais", reviewMode: "Questões", completed: false, manual: false, order: tasks.length });
+    if (remaining >= 1) push({ id: `sim-${week.weekStart}`, kind: "simulation", title: "Prova antiga ou simulado completo", area: "Preventiva", subarea: "IAMSPE / SES-PE / USP-SP", priority: "P1", source: "Residência", estimatedHours: Math.min(4, remaining), theory: false, questions: false, flashcards: false, flashcardsRequired: false, questionGoal: "Prova completa em condições reais", reviewMode: "Questões", completed: false, manual: false, order: tasks.length });
     return tasks;
   }
 
@@ -541,7 +579,7 @@ type CommonProps = {
 };
 
 function JoaoHeader({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) {
-  return <div className="joao-page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{text}</p></div><div className="joao-bank-lock"><ShieldCheck size={18} /><span><strong>IAMSPE 50%</strong><strong>SES-PE 50%</strong></span></div></div>;
+  return <div className="joao-page-head"><div><span>{eyebrow}</span><h1>{title}</h1><p>{text}</p></div><div className="joao-bank-lock"><ShieldCheck size={18} /><span>{JOAO_EXAM_BANKS.map(bank => <strong key={bank.key}>{bank.name} {bank.percent}%</strong>)}</span></div></div>;
 }
 
 function JoaoHome({ currentWeek, coverage, status, state, setSelectedWeek }: CommonProps & { currentWeek: WeekPlan; coverage: number; status: ReturnType<typeof globalStatus> }) {
@@ -893,12 +931,30 @@ function JoaoTopics({ state, updateState, setToast }: { state: JoaoState; update
     });
     setToast("Dados do assunto excluídos sem deixar revisões órfãs.");
   }
-  return <div className="joao-stack"><JoaoHeader eyebrow="MATRIZ IAMSPE + SES-PE" title={`${matrixTopics.length} assuntos organizados por retorno`} text="Todos começaram como não estudados. Cada tema permanece uma unidade, mesmo quando exige várias sessões." /><section className="joao-panel"><div className="joao-topic-toolbar"><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar assunto, área ou subárea" /><div>{(["Todas", ...AREAS] as const).map(item => <button className={area === item ? "active" : ""} key={item} onClick={() => setArea(item)}>{item}</button>)}</div></div><div className="joao-matrix-head"><span>{filtered.length} assuntos</span><small>IAMSPE 50% + SES-PE 50% · recorrência histórica combinada</small></div><div className="joao-matrix">{filtered.map(topic => { const progress = state.progress[topic.id] ?? defaultProgress(); return <article key={topic.id}><b className={topic.priority.toLowerCase()}>{topic.priority}</b><div><span>{topic.area} · {topic.subarea}</span><strong>{topic.title}</strong><small>{topic.size} · IAMSPE {topic.iamspePriority || "base"} · SES-PE {topic.sesPriority || "base"}{topic.update2028 ? " · atualizar diretriz em 2028" : ""}</small></div><div className="joao-mini-stages"><span className={progress.theory ? "done" : ""}>Teoria</span><span className={progress.questions ? "done" : ""}>Questões</span><span className={progress.flashcardsRequired ? progress.flashcards ? "done" : "needed" : "optional"}>Flashcards</span></div><em className={progress.reviewStatus.toLocaleLowerCase("pt-BR").replace(" ", "-")}>{progress.reviewStatus}</em><div className="joao-matrix-actions"><button onClick={() => toggleTheory(topic)}>{progress.theory ? "Desmarcar teoria" : "Concluir teoria"}</button><button onClick={() => editTracking(topic)}><Pencil size={12} /> Editar</button><button className="delete" onClick={() => resetTracking(topic)}><Trash2 size={12} /> Excluir dados</button></div></article>; })}</div></section></div>;
+  return <div className="joao-stack"><JoaoHeader eyebrow="MATRIZ IAMSPE · SES-PE · USP-SP" title={`${matrixTopics.length} assuntos organizados por retorno`} text="Todos começaram como não estudados. Cada tema permanece uma unidade, mesmo quando exige várias sessões." /><section className="joao-panel"><div className="joao-topic-toolbar"><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar assunto, área ou subárea" /><div>{(["Todas", ...AREAS] as const).map(item => <button className={area === item ? "active" : ""} key={item} onClick={() => setArea(item)}>{item}</button>)}</div></div><div className="joao-matrix-head"><span>{filtered.length} assuntos</span><small>IAMSPE 40% · SES-PE 30% · USP-SP 30% · cadernos 2021–2026</small></div><div className="joao-matrix">{filtered.map(topic => { const progress = state.progress[topic.id] ?? defaultProgress(); return <article key={topic.id}><b className={topic.priority.toLowerCase()}>{topic.priority}</b><div><span>{topic.area} · {topic.subarea}</span><strong>{topic.title}</strong><small>{topic.size} · IAMSPE {topic.iamspeYears ? `${topic.iamspeYears}/6` : "base"} · SES-PE {topic.sesYears ? `${topic.sesYears}/6` : "base"} · USP-SP {topic.uspYears ? `${topic.uspYears}/6` : "base"}{topic.update2028 ? " · atualizar diretriz em 2028" : ""}</small></div><div className="joao-mini-stages"><span className={progress.theory ? "done" : ""}>Teoria</span><span className={progress.questions ? "done" : ""}>Questões</span><span className={progress.flashcardsRequired ? progress.flashcards ? "done" : "needed" : "optional"}>Flashcards</span></div><em className={progress.reviewStatus.toLocaleLowerCase("pt-BR").replace(" ", "-")}>{progress.reviewStatus}</em><div className="joao-matrix-actions"><button onClick={() => toggleTheory(topic)}>{progress.theory ? "Desmarcar teoria" : "Concluir teoria"}</button><button onClick={() => editTracking(topic)}><Pencil size={12} /> Editar</button><button className="delete" onClick={() => resetTracking(topic)}><Trash2 size={12} /> Excluir dados</button></div></article>; })}</div></section></div>;
 }
 
 function JoaoPriorities() {
-  const p1 = matrixTopics.filter(topic => topic.priority === "P1");
-  return <div className="joao-stack"><JoaoHeader eyebrow="PRIORIDADES" title="Matriz combinada 50/50" text="A recorrência histórica de longo prazo orienta P1, P2 e P3; uma única edição nunca determina sozinha o plano." /><div className="joao-bank-pair"><article><span>50%</span><div><strong>IAMSPE</strong><p>Clínica direta, cirurgia prática e preventiva interpretativa.</p></div></article><article><span>50%</span><div><strong>SES-PE</strong><p>Epidemiologia, perioperatório e temas práticos recorrentes.</p></div></article></div><section className="joao-panel"><div className="joao-panel-title"><div><span>P1 · NÚCLEO</span><h2>Maior retorno combinado</h2><p>Alta recorrência e/ou conteúdo fundamental para as duas provas.</p></div></div><div className="joao-priority-grid">{p1.map(topic => <article key={topic.id}><b>P1</b><div><span>{topic.area} · {topic.subarea}</span><strong>{topic.title}</strong><small>peso combinado {topic.combinedPriority.toFixed(1)}</small></div></article>)}</div></section><section className="joao-panel"><div className="joao-rules"><span><b>P1</b> Núcleo de alta recorrência ou fundamento indispensável.</span><span><b>P2</b> Importante e cobrado regularmente.</span><span><b>P3</b> Complementar, incluído sem retirar espaço do núcleo.</span><span><b>5 áreas</b> Clínica, Cirurgia, GO, Pediatria e Preventiva avançam em paralelo.</span></div></section></div>;
+  const p1 = matrixTopics
+    .filter(topic => topic.priority === "P1")
+    .sort((a, b) => b.combinedPriority - a.combinedPriority || a.title.localeCompare(b.title, "pt-BR"));
+
+  return <div className="joao-stack">
+    <JoaoHeader eyebrow="PRIORIDADES · 18 CADERNOS" title="Matriz combinada 40% · 30% · 30%" text="Seis edições de acesso direto por instituição, entre 2021 e 2026. A incidência anual orienta P1, P2 e P3 sem deixar uma única prova dominar a rota." />
+    <div className="joao-bank-pair joao-bank-trio">
+      {JOAO_EXAM_BANKS.map(bank => <article key={bank.key}><span>{bank.percent}%</span><div><strong>{bank.name}</strong><p>{bank.description}</p></div></article>)}
+    </div>
+    <section className="joao-panel">
+      <div className="joao-panel-title"><div><span>P1 · NÚCLEO COMPROVADO</span><h2>Maior retorno ponderado nas três provas</h2><p>Frequência anual dos marcadores temáticos, desempate pela curadoria da banca e pesos 40/30/30.</p></div></div>
+      <div className="joao-priority-grid">{p1.map(topic => <article key={topic.id}><b>P1</b><div><span>{topic.area} · {topic.subarea}</span><strong>{topic.title}</strong><small>IAMSPE {topic.iamspeYears}/6 · SES-PE {topic.sesYears}/6 · USP {topic.uspYears}/6</small><small>retorno ponderado {topic.combinedPriority.toFixed(1)}</small></div></article>)}</div>
+    </section>
+    <section className="joao-panel">
+      <div className="joao-panel-title"><div><span>AUDITORIA · 2021–2026</span><h2>Provas consultadas, uma por uma</h2><p>Os números indicam em quantos anos o marcador do assunto aparece no caderno, não a contagem de questões.</p></div></div>
+      <div className="joao-exam-audit">{JOAO_EXAM_BANKS.map(bank => <article key={bank.key}><header><strong>{bank.name}</strong><span>{bank.percent}% da rota</span></header><div>{JOAO_EXAM_SOURCES[bank.key].map(source => <a key={source.year} href={source.url} target="_blank" rel="noreferrer"><b>{source.year}</b><span>{source.kind}</span><ChevronRight size={13} /></a>)}</div>{bank.key === JOAO_SUPPLEMENTARY_EXAM.bank && <a className="joao-extra-exam" href={JOAO_SUPPLEMENTARY_EXAM.url} target="_blank" rel="noreferrer"><b>{JOAO_SUPPLEMENTARY_EXAM.year}</b><span>{JOAO_SUPPLEMENTARY_EXAM.kind}</span><ChevronRight size={13} /></a>}</article>)}</div>
+      <p className="joao-audit-note">SES-PE 2024: o caderno principal não respondeu no acervo público; a edição oficial complementar 2024.2 foi utilizada e identificada. A prova 2026.2 é adicional e não duplica o peso de 2026.</p>
+    </section>
+    <section className="joao-panel"><div className="joao-rules"><span><b>P1</b> Núcleo transversal e recorrente nos cadernos verificados.</span><span><b>P2</b> Importante, regularmente cobrado ou base para temas correlatos.</span><span><b>P3</b> Complementar, incluído sem retirar espaço do núcleo.</span><span><b>5 áreas</b> Clínica, Cirurgia, GO, Pediatria e Preventiva avançam em paralelo.</span></div></section>
+  </div>;
 }
 
 function JoaoPerformance({ state, coverage, status }: { state: JoaoState; coverage: number; status: ReturnType<typeof globalStatus> }) {
@@ -910,7 +966,7 @@ function JoaoPerformance({ state, coverage, status }: { state: JoaoState; covera
 }
 
 function JoaoSimulations({ state, updateState, setToast, today }: { state: JoaoState; updateState: (recipe: (previous: JoaoState) => JoaoState) => void; setToast: (message: string) => void; today: string }) {
-  const [form, setForm] = useState({ date: today, bank: "IAMSPE" as "IAMSPE" | "SES-PE", questions: 100, accuracy: 0 });
+  const [form, setForm] = useState({ date: today, bank: "IAMSPE" as JoaoExamName, questions: 100, accuracy: 0 });
   const [editingId, setEditingId] = useState<string | null>(null);
   function save() {
     if (!form.date || form.questions <= 0 || form.accuracy < 0 || form.accuracy > 100) return setToast("Confira os dados do simulado.");
@@ -930,7 +986,7 @@ function JoaoSimulations({ state, updateState, setToast, today }: { state: JoaoS
     if (editingId === id) { setEditingId(null); setForm({ date: today, bank: "IAMSPE", questions: 100, accuracy: 0 }); }
     setToast("Simulado excluído.");
   }
-  return <div className="joao-stack"><JoaoHeader eyebrow="SIMULADOS" title="Provas completas no momento certo" text="Até o fim de 2027, a prioridade é construir a base. Em 2028, provas antigas e simulados IAMSPE/SES-PE tornam-se predominantes." /><section className="joao-roadmap"><article><span>2026–2027</span><strong>Base + questões por tema</strong><p>Progressão para subárea e grande área conforme consolidação.</p></article><ChevronRight /><article><span>Dez/2027</span><strong>Buffer e consolidação</strong><p>Resolver pendências sem criar uma nova corrida de conteúdo.</p></article><ChevronRight /><article><span>2028</span><strong>Simulados completos</strong><p>IAMSPE e SES-PE, provas antigas, diretrizes e correção de fraquezas.</p></article></section><div className="joao-two-columns"><section className="joao-panel joao-question-form"><div className="joao-panel-title"><div><span>{editingId ? "EDITAR" : "REGISTRAR"}</span><h2>Resultado de prova completa</h2></div></div><label>Data<input type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} /></label><label>Banca<select value={form.bank} onChange={event => setForm({ ...form, bank: event.target.value as "IAMSPE" | "SES-PE" })}><option>IAMSPE</option><option>SES-PE</option></select></label><div className="joao-form-grid"><label>Questões<input type="number" min="1" value={form.questions} onChange={event => setForm({ ...form, questions: Number(event.target.value) })} /></label><label>Acerto (%)<input type="number" min="0" max="100" value={form.accuracy} onChange={event => setForm({ ...form, accuracy: Number(event.target.value) })} /></label></div><button className="joao-primary full" onClick={save}><Check size={16} /> {editingId ? "Atualizar resultado" : "Salvar resultado"}</button></section><section className="joao-panel"><div className="joao-panel-title"><div><span>HISTÓRICO</span><h2>{state.simulations.length} simulados</h2></div></div>{state.simulations.length ? <div className="joao-sim-list">{state.simulations.map(item => <article key={item.id}><b>{item.accuracy}%</b><div><strong>{item.bank}</strong><span>{item.questions} questões · {item.date.split("-").reverse().join("/")}</span></div><div className="joao-inline-actions"><button onClick={() => edit(item)}><Pencil size={13} /> Editar</button><button className="delete" onClick={() => remove(item.id)}><Trash2 size={13} /> Excluir</button></div></article>)}</div> : <div className="joao-empty"><ClipboardCheck size={22} /><strong>Nenhum simulado registrado.</strong></div>}</section></div></div>;
+  return <div className="joao-stack"><JoaoHeader eyebrow="SIMULADOS" title="Provas completas no momento certo" text="Até o fim de 2027, a prioridade é construir a base. Em 2028, provas antigas e simulados IAMSPE, SES-PE e USP-SP tornam-se predominantes." /><section className="joao-roadmap"><article><span>2026–2027</span><strong>Base + questões por tema</strong><p>Progressão para subárea e grande área conforme consolidação.</p></article><ChevronRight /><article><span>Dez/2027</span><strong>Buffer e consolidação</strong><p>Resolver pendências sem criar uma nova corrida de conteúdo.</p></article><ChevronRight /><article><span>2028</span><strong>Simulados completos</strong><p>IAMSPE, SES-PE e USP-SP, provas antigas, diretrizes e correção de fraquezas.</p></article></section><div className="joao-two-columns"><section className="joao-panel joao-question-form"><div className="joao-panel-title"><div><span>{editingId ? "EDITAR" : "REGISTRAR"}</span><h2>Resultado de prova completa</h2></div></div><label>Data<input type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} /></label><label>Banca<select value={form.bank} onChange={event => setForm({ ...form, bank: event.target.value as JoaoExamName, questions: event.target.value === "USP-SP" ? 120 : 100 })}>{JOAO_EXAM_BANKS.map(bank => <option key={bank.key}>{bank.name}</option>)}</select></label><div className="joao-form-grid"><label>Questões<input type="number" min="1" value={form.questions} onChange={event => setForm({ ...form, questions: Number(event.target.value) })} /></label><label>Acerto (%)<input type="number" min="0" max="100" value={form.accuracy} onChange={event => setForm({ ...form, accuracy: Number(event.target.value) })} /></label></div><button className="joao-primary full" onClick={save}><Check size={16} /> {editingId ? "Atualizar resultado" : "Salvar resultado"}</button></section><section className="joao-panel"><div className="joao-panel-title"><div><span>HISTÓRICO</span><h2>{state.simulations.length} simulados</h2></div></div>{state.simulations.length ? <div className="joao-sim-list">{state.simulations.map(item => <article key={item.id}><b>{item.accuracy}%</b><div><strong>{item.bank}</strong><span>{item.questions} questões · {item.date.split("-").reverse().join("/")}</span></div><div className="joao-inline-actions"><button onClick={() => edit(item)}><Pencil size={13} /> Editar</button><button className="delete" onClick={() => remove(item.id)}><Trash2 size={13} /> Excluir</button></div></article>)}</div> : <div className="joao-empty"><ClipboardCheck size={22} /><strong>Nenhum simulado registrado.</strong></div>}</section></div></div>;
 }
 
 function JoaoReviews({ state, updateState, setToast }: { state: JoaoState; updateState: (recipe: (previous: JoaoState) => JoaoState) => void; setToast: (message: string) => void }) {
@@ -969,5 +1025,5 @@ function JoaoReviews({ state, updateState, setToast }: { state: JoaoState; updat
 }
 
 function JoaoGoals({ coverage, status, state }: { coverage: number; status: ReturnType<typeof globalStatus>; state: JoaoState }) {
-  return <div className="joao-stack"><JoaoHeader eyebrow="BANCAS E METAS" title="Objetivo fixo do perfil João" text="Os pesos desta rota são exclusivos e não alteram as configurações de nenhum outro perfil." /><div className="joao-bank-pair large"><article><span>50%</span><div><strong>IAMSPE</strong><p>Preparação equilibrada entre as cinco grandes áreas.</p></div></article><article><span>50%</span><div><strong>SES-PE</strong><p>Preparação equilibrada entre as cinco grandes áreas.</p></div></article></div><section className="joao-panel"><div className="joao-goal-timeline"><article><span>24/08/2026</span><strong>Início do plano</strong><p>Primeira entrada semanal por horas e demandas da faculdade.</p></article><article><span>30/11/2027</span><strong>100% da primeira base</strong><p>Hoje: {coverage}% · estado {status.label.toLocaleLowerCase("pt-BR")}.</p></article><article><span>Dezembro/2027</span><strong>Buffer</strong><p>Pendências, consolidação e absorção de variações do calendário.</p></article><article><span>2028</span><strong>Predomínio de prática</strong><p>Questões, revisões, provas antigas, simulados, diretrizes e fraquezas.</p></article></div></section><section className="joao-panel"><div className="joao-rules"><span><b>Organização</b> O site não fornece aulas, questões nem flashcards.</span><span><b>Autonomia</b> As metas são semanais; não existem dias obrigatórios.</span><span><b>Saldo</b> {state.balanceHours >= 0 ? `+${state.balanceHours.toFixed(1)}h de reserva` : `${Math.abs(state.balanceHours).toFixed(1)}h abaixo da referência`}.</span><span><b>Escopo</b> Todas estas regras existem somente no perfil João.</span></div></section></div>;
+  return <div className="joao-stack"><JoaoHeader eyebrow="BANCAS E METAS" title="Objetivo fixo do perfil João" text="Os pesos desta rota são exclusivos e não alteram as configurações de nenhum outro perfil." /><div className="joao-bank-pair joao-bank-trio large">{JOAO_EXAM_BANKS.map(bank => <article key={bank.key}><span>{bank.percent}%</span><div><strong>{bank.name}</strong><p>{bank.description}</p></div></article>)}</div><section className="joao-panel"><div className="joao-goal-timeline"><article><span>24/08/2026</span><strong>Início do plano</strong><p>Primeira entrada semanal por horas e demandas da faculdade.</p></article><article><span>30/11/2027</span><strong>100% da primeira base</strong><p>Hoje: {coverage}% · estado {status.label.toLocaleLowerCase("pt-BR")}.</p></article><article><span>Dezembro/2027</span><strong>Buffer</strong><p>Pendências, consolidação e absorção de variações do calendário.</p></article><article><span>2028</span><strong>Predomínio de prática</strong><p>Questões, revisões, provas antigas, simulados, diretrizes e fraquezas.</p></article></div></section><section className="joao-panel"><div className="joao-rules"><span><b>Organização</b> O site não fornece aulas, questões nem flashcards.</span><span><b>Autonomia</b> As metas são semanais; não existem dias obrigatórios.</span><span><b>Saldo</b> {state.balanceHours >= 0 ? `+${state.balanceHours.toFixed(1)}h de reserva` : `${Math.abs(state.balanceHours).toFixed(1)}h abaixo da referência`}.</span><span><b>Escopo</b> Todas estas regras existem somente no perfil João.</span></div></section></div>;
 }
